@@ -10,7 +10,8 @@ GitHub 저장소를 포트폴리오로 활용하기 위해, 모든 작업은 버
 
 | 브랜치 | 역할 |
 |---|---|
-| main | 안정 버전. 검증 완료 후 병합되는 기준 브랜치 |
+| main | 안정 버전 기록용 브랜치 |
+| develop | 작업 누적 및 통합 검토용 브랜치 |
 | docs/* | 문서 작업 |
 | feature/* | 기능 구현 |
 | fix/* | 버그 수정 |
@@ -18,7 +19,10 @@ GitHub 저장소를 포트폴리오로 활용하기 위해, 모든 작업은 버
 | security/* | 보안 관련 작업 |
 | release/* | 릴리스 준비 |
 
-혼자 개발하는 프로젝트이므로 기본 운영은 `main` 기준으로 작업 브랜치를 만들고 PR 병합하는 방식으로 진행한다.
+기본 운영은 `develop` 기준으로 작업 브랜치를 만들고 PR 병합하는 방식으로 진행한다.
+
+`main`은 안정 버전 기록용으로 유지한다.
+큰 단계가 안정적으로 마무리되면 `develop`에서 `main`으로 PR을 생성하고, 검토 후 병합한다.
 
 ## 3. 브랜치 이름 규칙
 
@@ -75,19 +79,31 @@ test: add pii masking test cases
 
 ## 6. PR 제목 규칙
 
+PR 제목은 커밋 메시지와 같은 형식을 사용한다.
+
 ```text
-[<type>] v<version> <작업명>
+<type>: <작업 내용>
 ```
 
 예시:
 
 ```text
-[docs] v0.0.1 프로젝트 방향 확정
-[docs] v0.0.2 기술스택 확정
-[security] v0.0.4 보안/커밋 금지 규칙 확정
-[feat] v1.0.2 계약서 업로드 구현
-[security] v1.0.10 원본 파일 삭제 처리
+docs: complete v0.0.1 project direction checklist
+docs: add review workflow rules
+docs: add v0.0.2 repository rules checklist
+security: update commit protection rules
+feat: add contract upload flow
+fix: handle empty extracted text
 ```
+
+PR 본문에는 다음 내용을 작성한다.
+
+- 작업 목적
+- 작업 내용
+- 변경 파일
+- 검증 내용
+- 보안 체크
+- 남은 이슈
 
 ## 7. 태그 규칙
 
@@ -108,8 +124,8 @@ v0.1.1
 v1.0.4
 ```
 
-태그는 반드시 `main` 브랜치 최신 커밋 기준으로 생성한다.  
-작업 브랜치에서 직접 태그를 생성하지 않는다.
+태그는 반드시 `main` 브랜치 최신 커밋 기준으로 생성한다.
+작업 브랜치나 `develop` 브랜치에서 직접 태그를 생성하지 않는다.
 
 태그는 annotated tag를 사용한다.
 
@@ -124,22 +140,23 @@ git push origin v0.0.1
 
 | 상황 | 태그 생성 여부 |
 |---|---|
-| 체크리스트 문서 작성 및 검증 완료 | 가능 |
-| 기능 구현 및 검증 완료 | 가능 |
+| main 병합 후 안정 버전 검증 완료 | 가능 |
+| main 병합 전 체크리스트 작성 완료 | 불가 |
+| develop 브랜치 검토 완료 | 불가 |
 | 작업 중간 저장 | 불가 |
 | 실패한 실험 | 불가 |
-| main 병합 전 | 불가 |
 | PR 검토 전 | 불가 |
 | 작업 브랜치 기준 | 불가 |
+| develop 브랜치 기준 | 불가 |
 
 ## 9. 기본 작업 흐름
 
 ```bash
-# 1. main 최신화
-git checkout main
-git pull origin main
+# 1. develop 최신화
+git checkout develop
+git pull origin develop
 
-# 2. 브랜치 생성
+# 2. develop에서 작업 브랜치 생성
 git checkout -b docs/v0.0.1-project-direction
 
 # 3. 작업 후 상태 확인
@@ -159,16 +176,22 @@ git commit -m "docs: add v0.0.1 project direction checklist"
 # 7. 원격 브랜치 push
 git push origin docs/v0.0.1-project-direction
 
-# 8. GitHub에서 PR 생성 후 main 병합
+# 8. GitHub에서 작업 브랜치 -> develop PR 생성 후 병합
 
-# 9. main 최신화
+# 9. develop 최신화
+git checkout develop
+git pull origin develop
+
+# 10. 큰 단계가 안정적으로 마무리되면 develop -> main PR 생성 후 병합
+
+# 11. main 최신화
 git checkout main
 git pull origin main
 
-# 10. 태그 생성
+# 12. main 병합 후 태그 생성
 git tag -a v0.0.1 -m "v0.0.1 프로젝트 방향 확정"
 
-# 11. 태그 push
+# 13. 태그 push
 git push origin v0.0.1
 ```
 
