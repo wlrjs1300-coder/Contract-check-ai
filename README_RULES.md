@@ -15,7 +15,7 @@ ContractCheck AI
 - 모든 작업은 버전 단위로 나누어 진행한다.
 - 버전별 작업 내용, 검증 내용, 릴리스 기록은 체크리스트 MD 파일로 남긴다.
 - 공개 저장소에는 최종 코드, 설계 문서, 검증 기록만 포함한다.
-- 작업 중간 산출물, 임시 메모, 외부 도구 입력/출력 원문은 공개 저장소에 포함하지 않는다.
+- 작업 중간 산출물, 임시 메모, 검토 전 초안은 공개 저장소에 포함하지 않는다.
 - 원본 계약서, 개인정보, API Key, Secret, Token은 절대 커밋하지 않는다.
 - 브랜치, 커밋, PR, 태그 규칙을 지킨다.
 - 태그는 검증 완료 후 main 브랜치에 병합된 커밋 기준으로만 생성한다.
@@ -36,10 +36,15 @@ docs/
 ├── 05-folder-structure.md
 ├── 06-checklist-template.md
 ├── 07-adr-template.md
+├── 08-review-workflow-rules.md
 └── checklists/
     └── v0.0/
         └── v0.0.1-project-direction.md
 ```
+
+## 주요 규칙 문서
+
+- `docs/08-review-workflow-rules.md`: 작업 시작 전과 완료 후 확인할 검토 기준을 문서/기획, 설계, 구현, 릴리스 단계로 나누어 정의한다.
 
 ## 사용 방법
 
