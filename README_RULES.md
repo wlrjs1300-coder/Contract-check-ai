@@ -1,0 +1,61 @@
+# ContractCheck AI 규칙 문서 안내
+
+이 문서 세트는 ContractCheck AI 프로젝트를 버전 단위로 관리하고, 공개 GitHub 저장소에 정제된 코드와 문서만 남기기 위한 기준입니다.
+
+## 프로젝트명
+
+ContractCheck AI
+
+## 부제
+
+개인정보 보호형 계약서 사전점검 서비스
+
+## 핵심 원칙
+
+- 모든 작업은 버전 단위로 나누어 진행한다.
+- 버전별 작업 내용, 검증 내용, 릴리스 기록은 체크리스트 MD 파일로 남긴다.
+- 공개 저장소에는 최종 코드, 설계 문서, 검증 기록만 포함한다.
+- 작업 중간 산출물, 임시 메모, 외부 도구 입력/출력 원문은 공개 저장소에 포함하지 않는다.
+- 원본 계약서, 개인정보, API Key, Secret, Token은 절대 커밋하지 않는다.
+- 브랜치, 커밋, PR, 태그 규칙을 지킨다.
+- 태그는 검증 완료 후 main 브랜치에 병합된 커밋 기준으로만 생성한다.
+
+## 포함 파일
+
+```text
+README_RULES.md
+.gitignore.example
+.github/pull_request_template.md
+
+docs/
+├── 00-project-context.md
+├── 01-versioning-rules.md
+├── 02-git-rules.md
+├── 03-security-rules.md
+├── 04-public-records-rules.md
+├── 05-folder-structure.md
+├── 06-checklist-template.md
+├── 07-adr-template.md
+└── checklists/
+    └── v0.0/
+        └── v0.0.1-project-direction.md
+```
+
+## 사용 방법
+
+1. 프로젝트 루트에 이 문서 세트를 복사한다.
+2. `.gitignore.example` 내용을 실제 `.gitignore`에 반영한다.
+3. 작업을 시작하기 전 `docs/` 규칙 문서를 확인한다.
+4. 각 버전 작업은 `docs/checklists/`에 체크리스트를 만든 뒤 진행한다.
+5. 작업 완료 후 PR, main 병합, 태그 생성 순서로 마무리한다.
+
+## 공개 저장소에 올리지 않는 자료
+
+아래 자료는 로컬에서만 관리하고 GitHub에는 올리지 않는다.
+
+```text
+private-docs/
+raw-notes/
+temp-analysis/
+local-contracts/
+```

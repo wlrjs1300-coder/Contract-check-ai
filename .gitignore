@@ -1,0 +1,78 @@
+# env
+.env
+.env.*
+!.env.example
+
+# secrets
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+config/secrets.*
+
+# logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# frontend dependencies/build
+node_modules/
+dist/
+build/
+.vite/
+
+# python/backend
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# database
+*.db
+*.sqlite
+*.sqlite3
+data/
+mysql-data/
+
+# raw contract/document files
+*.pdf
+*.doc
+*.docx
+*.hwp
+*.hwpx
+*.txt
+
+# allow safe sample text files only
+!docs/samples/*.sample.txt
+!backend/tests/fixtures/*.sample.txt
+
+# uploaded/generated files
+uploads/
+storage/
+tmp/
+temp/
+documents/
+contracts/
+originals/
+reports/
+exports/
+downloads/
+
+# private working notes
+private-docs/
+raw-notes/
+temp-analysis/
+local-contracts/
+scratch/
+
+# editor/os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
