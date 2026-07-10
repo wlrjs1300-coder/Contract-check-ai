@@ -18,6 +18,8 @@ ContractCheck AI
 - 작업 중간 산출물, 임시 메모, 검토 전 초안은 공개 저장소에 포함하지 않는다.
 - 원본 계약서, 개인정보, API Key, Secret, Token은 절대 커밋하지 않는다.
 - 브랜치, 커밋, PR, 태그 규칙을 지킨다.
+- 일반 작업은 작업 브랜치에서 `develop`으로 PR을 생성하고 병합한다.
+- 큰 단계가 안정적으로 마무리되었을 때만 `develop`에서 `main`으로 PR을 생성한다.
 - 태그는 검증 완료 후 main 브랜치에 병합된 커밋 기준으로만 생성한다.
 
 ## 포함 파일
@@ -39,7 +41,9 @@ docs/
 ├── 08-review-workflow-rules.md
 └── checklists/
     └── v0.0/
-        └── v0.0.1-project-direction.md
+        ├── v0.0.1-project-direction.md
+        ├── v0.0.2-repository-rules.md
+        └── v0.0.3-security-public-records.md
 ```
 
 ## 주요 규칙 문서
@@ -52,7 +56,9 @@ docs/
 2. `.gitignore.example` 내용을 실제 `.gitignore`에 반영한다.
 3. 작업을 시작하기 전 `docs/` 규칙 문서를 확인한다.
 4. 각 버전 작업은 `docs/checklists/`에 체크리스트를 만든 뒤 진행한다.
-5. 작업 완료 후 PR, main 병합, 태그 생성 순서로 마무리한다.
+5. 일반 작업은 작업 브랜치에서 `develop`으로 PR을 생성하고 병합한다.
+6. 큰 단계 또는 정식 릴리스가 안정적으로 마무리되면 `develop`에서 `main`으로 PR을 생성한다.
+7. 태그는 `main` 병합 후 안정 버전 기준으로만 생성한다.
 
 ## 공개 저장소에 올리지 않는 자료
 
