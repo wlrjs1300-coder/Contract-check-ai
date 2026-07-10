@@ -39,11 +39,13 @@ docs/
 ├── 06-checklist-template.md
 ├── 07-adr-template.md
 ├── 08-review-workflow-rules.md
+├── 09-tech-stack.md
 └── checklists/
     └── v0.0/
         ├── v0.0.1-project-direction.md
         ├── v0.0.2-repository-rules.md
-        └── v0.0.3-security-public-records.md
+        ├── v0.0.3-security-public-records.md
+        └── v0.0.4-tech-stack.md
 ```
 
 ## 주요 규칙 문서
