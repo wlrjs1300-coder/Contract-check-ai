@@ -26,7 +26,7 @@ ContractCheck AI
 
 ```text
 README_RULES.md
-.gitignore.example
+.gitignore
 .github/pull_request_template.md
 
 docs/
@@ -45,7 +45,8 @@ docs/
         ├── v0.0.1-project-direction.md
         ├── v0.0.2-repository-rules.md
         ├── v0.0.3-security-public-records.md
-        └── v0.0.4-tech-stack.md
+        ├── v0.0.4-tech-stack.md
+        └── v0.0.5-checklist-governance.md
 ```
 
 ## 주요 규칙 문서
@@ -55,7 +56,7 @@ docs/
 ## 사용 방법
 
 1. 프로젝트 루트에 이 문서 세트를 복사한다.
-2. `.gitignore.example` 내용을 실제 `.gitignore`에 반영한다.
+2. `.gitignore` 기준에 맞게 비공개 파일과 민감정보가 제외되는지 확인한다.
 3. 작업을 시작하기 전 `docs/` 규칙 문서를 확인한다.
 4. 각 버전 작업은 `docs/checklists/`에 체크리스트를 만든 뒤 진행한다.
 5. 일반 작업은 작업 브랜치에서 `develop`으로 PR을 생성하고 병합한다.
