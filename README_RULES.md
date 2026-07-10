@@ -46,7 +46,8 @@ docs/
         ├── v0.0.2-repository-rules.md
         ├── v0.0.3-security-public-records.md
         ├── v0.0.4-tech-stack.md
-        └── v0.0.5-checklist-governance.md
+        ├── v0.0.5-checklist-governance.md
+        └── v0.0.6-version-plan.md
 ```
 
 ## 주요 규칙 문서

@@ -149,7 +149,10 @@ git push origin v0.0.1
 | 작업 브랜치 기준 | 불가 |
 | develop 브랜치 기준 | 불가 |
 
-## 9. 기본 작업 흐름
+## 9. 일반 작업 흐름
+
+일반 작업은 작업 브랜치에서 `develop`으로 PR을 생성하고 병합하는 흐름으로 진행한다.
+일반 작업마다 `main` 병합이나 태그 생성을 진행하지 않는다.
 
 ```bash
 # 1. develop 최신화
@@ -181,21 +184,36 @@ git push origin docs/v0.0.1-project-direction
 # 9. develop 최신화
 git checkout develop
 git pull origin develop
+```
 
-# 10. 큰 단계가 안정적으로 마무리되면 develop -> main PR 생성 후 병합
+## 10. 정식 릴리스 흐름
 
-# 11. main 최신화
+큰 단계가 안정적으로 마무리된 경우에만 `develop`에서 `main`으로 정식 릴리스 PR을 생성한다.
+태그는 `main` 병합 후 안정 검증을 통과한 경우에만 생성한다.
+
+```bash
+# 1. 큰 단계 완료 확인
+git checkout develop
+git pull origin develop
+
+# 2. develop 기준 통합 검증
+git status
+git diff
+
+# 3. GitHub에서 develop -> main PR 생성 후 병합
+
+# 4. main 최신화
 git checkout main
 git pull origin main
 
-# 12. main 병합 후 태그 생성
+# 5. main 최신 커밋 기준 안정 검증 후 태그 생성
 git tag -a v0.0.1 -m "v0.0.1 프로젝트 방향 확정"
 
-# 13. 태그 push
+# 6. 태그 push
 git push origin v0.0.1
 ```
 
-## 10. 커밋 전 필수 확인
+## 11. 커밋 전 필수 확인
 
 ```bash
 git status
