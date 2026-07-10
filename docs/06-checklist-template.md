@@ -16,7 +16,7 @@ docs/checklists/v0.0/v0.0.1-project-direction.md
 
 - 버전: vX.X.X
 - 브랜치: type/vX.X.X-short-description
-- 태그: vX.X.X
+- 태그: 필요 시 생성
 - 작업명:
 - 작업 목적:
 - 시작일: YYYY-MM-DD
@@ -49,8 +49,8 @@ docs/checklists/v0.0/v0.0.1-project-direction.md
 
 ## 구현 체크리스트
 
-- [ ] 작업 전 `main` 최신화
-- [ ] 버전 규칙에 맞는 브랜치 생성
+- [ ] 작업 전 `develop` 최신화
+- [ ] `develop`에서 버전 규칙에 맞는 작업 브랜치 생성
 - [ ] 기존 구조 확인
 - [ ] 필요한 문서 또는 코드 작성
 - [ ] 관련 문서 갱신
@@ -65,13 +65,14 @@ docs/checklists/v0.0/v0.0.1-project-direction.md
 ### 공통 검증
 
 - [ ] `git status` 확인
+- [ ] `git diff` 확인
 - [ ] `git diff --cached` 확인
 - [ ] `git diff --cached --name-only` 확인
 - [ ] 변경 파일 확인
 - [ ] 공개 저장소에 올려도 되는 내용인지 확인
 - [ ] API Key, 토큰, 계정 정보 등 민감정보가 포함되지 않았는지 확인
 - [ ] 원본 계약서 파일이 포함되지 않았는지 확인
-- [ ] 작업 중간 산출물 또는 외부 도구 입력/출력 원문이 포함되지 않았는지 확인
+- [ ] 작업 중간 산출물 또는 검토 전 입력/출력 원문이 포함되지 않았는지 확인
 - [ ] 자동 삽입된 공동 작성자 문구가 포함되지 않았는지 확인
 
 ### 문서 작업인 경우
@@ -122,14 +123,30 @@ docs/checklists/v0.0/v0.0.1-project-direction.md
 
 ---
 
-## 릴리스
+## 일반 작업 완료 절차
 
 - [ ] 커밋 완료
+- [ ] 커밋 후 `git log -1 --pretty=full`로 커밋 메시지와 공동 작성자 문구 확인
 - [ ] 원격 브랜치 push 완료
-- [ ] Pull Request 생성
+- [ ] 작업 브랜치에서 `develop`으로 Pull Request 생성
+- [ ] Pull Request 검토 완료
+- [ ] `develop` 병합 완료
+- [ ] 로컬 `develop` 최신화 완료
+- [ ] 작업 브랜치 정리 완료
+
+---
+
+## 정식 릴리스 절차
+
+큰 단계 또는 정식 릴리스일 때만 진행한다.
+태그는 `main` 병합 후에만 생성한다.
+
+- [ ] `develop` 기준 검증 완료
+- [ ] `develop`에서 `main`으로 Pull Request 생성
 - [ ] Pull Request 검토 완료
 - [ ] `main` 병합 완료
 - [ ] `main` 최신화 완료
+- [ ] main 병합 후 안정 버전 검증 완료
 - [ ] 태그 생성 완료
 - [ ] 태그 push 완료
 
