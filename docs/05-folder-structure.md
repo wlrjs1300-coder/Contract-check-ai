@@ -27,12 +27,14 @@ contract-check-ai/
 │   │       ├── v0.1.1-service-overview.md
 │   │       ├── v0.1.2-mvp-scope.md
 │   │       ├── v0.1.3-supported-contract-scope.md
-│   │       └── v0.1.4-user-scenarios.md
+│   │       ├── v0.1.4-user-scenarios.md
+│   │       └── v0.1.5-service-responsibility-policy.md
 │   ├── planning/
 │   │   ├── service-overview.md
 │   │   ├── mvp-scope.md
 │   │   ├── supported-contract-scope.md
-│   │   └── user-scenarios.md
+│   │   ├── user-scenarios.md
+│   │   └── service-responsibility-policy.md
 │   ├── 00-project-context.md
 │   ├── 01-versioning-rules.md
 │   ├── 02-git-rules.md
@@ -62,11 +64,12 @@ v0.1 서비스 기획 단계에서는 `docs/planning/`에 서비스 기획 산�
 - `mvp-scope.md`
 - `supported-contract-scope.md`
 - `user-scenarios.md`
+- `service-responsibility-policy.md`
 
 후속 v0.1 단계에서 필요하면 다음 문서를 추가할 수 있다.
 아래 파일은 아직 생성된 파일로 취급하지 않는다.
 
-- `service-responsibility-policy.md`
+현재 별도로 확정된 추가 예정 문서는 없다.
 
 ## 3. 향후 목표 구조
 
