@@ -28,7 +28,8 @@ contract-check-ai/
 │   │       ├── v0.1.2-mvp-scope.md
 │   │       ├── v0.1.3-supported-contract-scope.md
 │   │       ├── v0.1.4-user-scenarios.md
-│   │       └── v0.1.5-service-responsibility-policy.md
+│   │       ├── v0.1.5-service-responsibility-policy.md
+│   │       └── v0.1.6-planning-alignment.md
 │   ├── planning/
 │   │   ├── service-overview.md
 │   │   ├── mvp-scope.md
