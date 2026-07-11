@@ -25,9 +25,11 @@ contract-check-ai/
 │   │   │   ├── v0.0.5-checklist-governance.md
 │   │   │   └── v0.0.6-version-plan.md
 │   │   └── v0.1/
-│   │       └── v0.1.1-service-overview.md
+│   │       ├── v0.1.1-service-overview.md
+│   │       └── v0.1.2-mvp-scope.md
 │   ├── planning/
-│   │   └── service-overview.md
+│   │   ├── service-overview.md
+│   │   └── mvp-scope.md
 │   ├── 00-project-context.md
 │   ├── 01-versioning-rules.md
 │   ├── 02-git-rules.md
@@ -47,20 +49,18 @@ contract-check-ai/
 - `docs/03-security-rules.md`
 - `docs/04-public-records-rules.md`
 
-현재 실제 서비스 기획 문서는 다음 파일이다.
-
-- `docs/planning/service-overview.md`
-
 ## 2.1 서비스 기획 문서 구조
 
 v0.1 서비스 기획 단계에서는 `docs/planning/`에 서비스 기획 산출물을 둔다.
 
-현재 실제 생성된 기획 문서는 `service-overview.md`이다.
+현재 실제 생성된 기획 문서는 다음과 같다.
+
+- `service-overview.md`
+- `mvp-scope.md`
 
 후속 v0.1 단계에서 필요하면 다음 문서를 추가할 수 있다.
 아래 파일은 아직 생성된 파일로 취급하지 않는다.
 
-- `mvp-scope.md`
 - `supported-contract-scope.md`
 - `user-scenarios.md`
 - `service-responsibility-policy.md`
