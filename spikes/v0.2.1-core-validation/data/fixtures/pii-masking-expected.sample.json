@@ -1,0 +1,132 @@
+{
+  "schema_version": "1.0.0",
+  "authorship": {
+    "method": "independent-human-authored-before-implementation",
+    "implementation_consulted": false,
+    "status": "approved-frozen-before-implementation"
+  },
+  "source_normalization": {
+    "encoding": "UTF-8",
+    "bom": "not-allowed",
+    "newline": "normalize-to-LF",
+    "hash_target": "normalized-text-reencoded-as-UTF-8"
+  },
+  "offset_convention": {
+    "index_base": 0,
+    "end_offset": "exclusive",
+    "newline": "LF",
+    "encoding": "UTF-8"
+  },
+  "entity_taxonomy": [
+    { "entity_type": "person", "mask_token_prefix": "PERSON", "detection_mode": "label_based" },
+    { "entity_type": "phone", "mask_token_prefix": "PHONE", "detection_mode": "format_based" },
+    { "entity_type": "email", "mask_token_prefix": "EMAIL", "detection_mode": "format_based" },
+    { "entity_type": "address", "mask_token_prefix": "ADDRESS", "detection_mode": "label_based" },
+    { "entity_type": "date_of_birth", "mask_token_prefix": "BIRTH", "detection_mode": "label_based" },
+    { "entity_type": "national_id_number", "mask_token_prefix": "RRN", "detection_mode": "format_based" },
+    { "entity_type": "business_registration_number", "mask_token_prefix": "BIZ_NO", "detection_mode": "format_based" },
+    { "entity_type": "account_number", "mask_token_prefix": "ACCOUNT", "detection_mode": "label_based" }
+  ],
+  "test_cases": [
+    {
+      "test_case_id": "pii-employment-01",
+      "source_file": "spikes/v0.2.1-core-validation/data/fixtures/pii-employment-01.sample.txt",
+      "source_text_sha256": "e89dc4e01a35bae26d7a880e78c9068cf6ee864565597441963f216bfc774620",
+      "expected_entities": [
+        { "ordinal": 1, "entity_type": "person", "start_offset": 205, "end_offset": 208, "source_line_start": 8, "source_line_end": 8, "expected_mask_token": "[PERSON_1]", "expected_entity_source_hash": "9c6b9b1b1627", "expected_warnings": [] },
+        { "ordinal": 2, "entity_type": "national_id_number", "start_offset": 217, "end_offset": 231, "source_line_start": 9, "source_line_end": 9, "expected_mask_token": "[RRN_1]", "expected_entity_source_hash": "aed2d6713b92", "expected_warnings": [] },
+        { "ordinal": 3, "entity_type": "address", "start_offset": 236, "end_offset": 253, "source_line_start": 10, "source_line_end": 10, "expected_mask_token": "[ADDRESS_1]", "expected_entity_source_hash": "9cd890f1ce2e", "expected_warnings": [] },
+        { "ordinal": 4, "entity_type": "phone", "start_offset": 260, "end_offset": 273, "source_line_start": 11, "source_line_end": 11, "expected_mask_token": "[PHONE_1]", "expected_entity_source_hash": "8784c90d4a01", "expected_warnings": [] },
+        { "ordinal": 5, "entity_type": "email", "start_offset": 279, "end_offset": 303, "source_line_start": 12, "source_line_end": 12, "expected_mask_token": "[EMAIL_1]", "expected_entity_source_hash": "c8564e8b85d0", "expected_warnings": [] },
+        { "ordinal": 6, "entity_type": "business_registration_number", "start_offset": 337, "end_offset": 349, "source_line_start": 16, "source_line_end": 16, "expected_mask_token": "[BIZ_NO_1]", "expected_entity_source_hash": "1bf58b3ee2a3", "expected_warnings": [] },
+        { "ordinal": 7, "entity_type": "account_number", "start_offset": 407, "end_offset": 420, "source_line_start": 20, "source_line_end": 20, "expected_mask_token": "[ACCOUNT_1]", "expected_entity_source_hash": "cb4daea01683", "expected_warnings": [] },
+        { "ordinal": 8, "entity_type": "date_of_birth", "start_offset": 440, "end_offset": 451, "source_line_start": 23, "source_line_end": 23, "expected_mask_token": "[BIRTH_1]", "expected_entity_source_hash": "8acad4237236", "expected_warnings": [] }
+      ],
+      "expected_false_positive_exclusions": [],
+      "expected_masked_text_sha256": "a7208c90f0863f7703ab4b6205b62686945406d4568fe2f2c79e5d3e8cad81c2",
+      "expected_document_warnings": [],
+      "manual_review_notes": [
+        "15행은 person 허용 레이블 목록에 없는 레이블에서 발견되어 탐지 대상이 아님.",
+        "17행은 관련 단어가 있으나 콜론이 붙은 정확한 레이블 형태가 아니어서 address로 인식되지 않음."
+      ]
+    },
+    {
+      "test_case_id": "pii-employment-02",
+      "source_file": "spikes/v0.2.1-core-validation/data/fixtures/pii-employment-02.sample.txt",
+      "source_text_sha256": "8a35d8890d6f800127b17a3356ee75f574586537f2c2f6a84b5b97b7f19b98c2",
+      "expected_entities": [
+        { "ordinal": 1, "entity_type": "person", "start_offset": 179, "end_offset": 182, "source_line_start": 8, "source_line_end": 8, "expected_mask_token": "[PERSON_1]", "expected_entity_source_hash": "2787ed492e05", "expected_warnings": [] },
+        { "ordinal": 2, "entity_type": "person", "start_offset": 188, "end_offset": 191, "source_line_start": 9, "source_line_end": 9, "expected_mask_token": "[PERSON_2]", "expected_entity_source_hash": "9c6b9b1b1627", "expected_warnings": [] },
+        { "ordinal": 3, "entity_type": "person", "start_offset": 197, "end_offset": 200, "source_line_start": 10, "source_line_end": 10, "expected_mask_token": "[PERSON_2]", "expected_entity_source_hash": "9c6b9b1b1627", "expected_warnings": ["repeated_value"] },
+        { "ordinal": 4, "entity_type": "phone", "start_offset": 216, "end_offset": 229, "source_line_start": 13, "source_line_end": 13, "expected_mask_token": "[PHONE_1]", "expected_entity_source_hash": "964dfc23ae18", "expected_warnings": [] },
+        { "ordinal": 5, "entity_type": "phone", "start_offset": 236, "end_offset": 249, "source_line_start": 14, "source_line_end": 14, "expected_mask_token": "[PHONE_1]", "expected_entity_source_hash": "964dfc23ae18", "expected_warnings": ["repeated_value"] },
+        { "ordinal": 6, "entity_type": "phone", "start_offset": 256, "end_offset": 269, "source_line_start": 15, "source_line_end": 15, "expected_mask_token": "[PHONE_2]", "expected_entity_source_hash": "aaf7908fa52c", "expected_warnings": [] },
+        { "ordinal": 7, "entity_type": "email", "start_offset": 284, "end_offset": 309, "source_line_start": 18, "source_line_end": 18, "expected_mask_token": "[EMAIL_1]", "expected_entity_source_hash": "4e2f66e54bba", "expected_warnings": [] },
+        { "ordinal": 8, "entity_type": "email", "start_offset": 315, "end_offset": 340, "source_line_start": 19, "source_line_end": 19, "expected_mask_token": "[EMAIL_2]", "expected_entity_source_hash": "be68be6e760d", "expected_warnings": [] },
+        { "ordinal": 9, "entity_type": "national_id_number", "start_offset": 359, "end_offset": 373, "source_line_start": 22, "source_line_end": 22, "expected_mask_token": "[RRN_1]", "expected_entity_source_hash": "7fb8522e425e", "expected_warnings": [] },
+        { "ordinal": 10, "entity_type": "national_id_number", "start_offset": 383, "end_offset": 397, "source_line_start": 23, "source_line_end": 23, "expected_mask_token": "[RRN_2]", "expected_entity_source_hash": "acd3276173f7", "expected_warnings": [] },
+        { "ordinal": 11, "entity_type": "address", "start_offset": 410, "end_offset": 427, "source_line_start": 26, "source_line_end": 26, "expected_mask_token": "[ADDRESS_1]", "expected_entity_source_hash": "c47ffe4680fe", "expected_warnings": [] },
+        { "ordinal": 12, "entity_type": "address", "start_offset": 436, "end_offset": 453, "source_line_start": 27, "source_line_end": 27, "expected_mask_token": "[ADDRESS_1]", "expected_entity_source_hash": "c47ffe4680fe", "expected_warnings": ["repeated_value"] },
+        { "ordinal": 13, "entity_type": "account_number", "start_offset": 468, "end_offset": 481, "source_line_start": 30, "source_line_end": 30, "expected_mask_token": "[ACCOUNT_1]", "expected_entity_source_hash": "57c30e7ff2ab", "expected_warnings": [] },
+        { "ordinal": 14, "entity_type": "account_number", "start_offset": 488, "end_offset": 501, "source_line_start": 31, "source_line_end": 31, "expected_mask_token": "[ACCOUNT_2]", "expected_entity_source_hash": "24ad60dea281", "expected_warnings": [] }
+      ],
+      "expected_false_positive_exclusions": [],
+      "expected_masked_text_sha256": "87b8ed5a268bb5c6ac0d15e0f54d6a567965df96f437066b071e7d0fd3fa3eab",
+      "expected_document_warnings": [],
+      "manual_review_notes": [
+        "ordinal 2·3은 서로 다른 레이블에서 탐지된 동일 person 값이므로 동일 토큰 [PERSON_2]를 부여함.",
+        "ordinal 11·12는 서로 다른 레이블에서 탐지된 동일 address 값이므로 동일 토큰을 부여함."
+      ]
+    },
+    {
+      "test_case_id": "pii-edge-01",
+      "source_file": "spikes/v0.2.1-core-validation/data/fixtures/pii-edge-01.sample.txt",
+      "source_text_sha256": "df4b469b640d9450084deaf5ca6017ab61e03ec76ae1dde4241ed211089ef522",
+      "expected_entities": [],
+      "expected_false_positive_exclusions": [
+        { "ordinal": 1, "looks_like_entity_type": "date_of_birth", "start_offset": 241, "end_offset": 272, "source_line_start": 10, "source_line_end": 10, "source_hash": "3b9e088c1d4b", "reason": "contract_date_not_birth_date" },
+        { "ordinal": 2, "looks_like_entity_type": "phone", "start_offset": 273, "end_offset": 318, "source_line_start": 11, "source_line_end": 11, "source_hash": "7348e4fd9b52", "reason": "document_number_not_phone" },
+        { "ordinal": 3, "looks_like_entity_type": "address", "start_offset": 319, "end_offset": 352, "source_line_start": 12, "source_line_end": 12, "source_hash": "92d25a8f3a1c", "reason": "unlabeled_address_like_text" },
+        { "ordinal": 4, "looks_like_entity_type": "person", "start_offset": 353, "end_offset": 379, "source_line_start": 13, "source_line_end": 13, "source_hash": "be91eaef05ec", "reason": "unlabeled_person_like_text" }
+      ],
+      "expected_masked_text_sha256": "df4b469b640d9450084deaf5ca6017ab61e03ec76ae1dde4241ed211089ef522",
+      "expected_document_warnings": ["no_pii_detected"],
+      "manual_review_notes": [
+        "탐지 대상이 전혀 없어 마스킹 후 텍스트 해시가 원본 해시와 동일함 — 정상."
+      ]
+    },
+    {
+      "test_case_id": "pii-edge-02",
+      "source_file": "spikes/v0.2.1-core-validation/data/fixtures/pii-edge-02.sample.txt",
+      "source_text_sha256": "2aa08f927971e252425900ca56e867bc9fbaf59c10116c17a6f2c27ac6b73445",
+      "expected_entities": [
+        { "ordinal": 1, "entity_type": "person", "start_offset": 773, "end_offset": 776, "source_line_start": 42, "source_line_end": 42, "expected_mask_token": "[PERSON_1]", "expected_entity_source_hash": "2787ed492e05", "expected_warnings": ["dense_cluster"] },
+        { "ordinal": 2, "entity_type": "phone", "start_offset": 783, "end_offset": 796, "source_line_start": 42, "source_line_end": 42, "expected_mask_token": "[PHONE_1]", "expected_entity_source_hash": "5af64a519d94", "expected_warnings": ["dense_cluster"] },
+        { "ordinal": 3, "entity_type": "email", "start_offset": 802, "end_offset": 825, "source_line_start": 42, "source_line_end": 42, "expected_mask_token": "[EMAIL_1]", "expected_entity_source_hash": "3d8054943b57", "expected_warnings": ["dense_cluster"] },
+        { "ordinal": 4, "entity_type": "national_id_number", "start_offset": 834, "end_offset": 848, "source_line_start": 42, "source_line_end": 42, "expected_mask_token": "[RRN_1]", "expected_entity_source_hash": "1e27504fea86", "expected_warnings": ["dense_cluster"] }
+      ],
+      "expected_false_positive_exclusions": [
+        { "ordinal": 1, "looks_like_entity_type": "address", "start_offset": 189, "end_offset": 243, "source_line_start": 8, "source_line_end": 8, "source_hash": "f963137aeca6", "reason": "unlabeled_address_like_text" },
+        { "ordinal": 2, "looks_like_entity_type": "date_of_birth", "start_offset": 257, "end_offset": 308, "source_line_start": 11, "source_line_end": 11, "source_hash": "dbd07a33c65c", "reason": "contract_date_not_birth_date" },
+        { "ordinal": 3, "looks_like_entity_type": "phone", "start_offset": 322, "end_offset": 359, "source_line_start": 14, "source_line_end": 14, "source_hash": "b79d9a94986a", "reason": "document_number_not_phone" },
+        { "ordinal": 4, "looks_like_entity_type": "account_number", "start_offset": 374, "end_offset": 412, "source_line_start": 17, "source_line_end": 17, "source_hash": "a629e9803869", "reason": "amount_not_account_number" },
+        { "ordinal": 5, "looks_like_entity_type": "person", "start_offset": 424, "end_offset": 436, "source_line_start": 20, "source_line_end": 20, "source_hash": "5392ecb7ff73", "reason": "company_name_not_person" },
+        { "ordinal": 6, "looks_like_entity_type": "person", "start_offset": 452, "end_offset": 495, "source_line_start": 23, "source_line_end": 23, "source_hash": "1bf6fd132111", "reason": "already_masked_token" },
+        { "ordinal": 7, "looks_like_entity_type": "national_id_number", "start_offset": 513, "end_offset": 534, "source_line_start": 26, "source_line_end": 26, "source_hash": "b6a8035e65ee", "reason": "broken_identifier" },
+        { "ordinal": 8, "looks_like_entity_type": "phone", "start_offset": 552, "end_offset": 566, "source_line_start": 29, "source_line_end": 29, "source_hash": "2be9b9f4a7b8", "reason": "broken_identifier" },
+        { "ordinal": 9, "looks_like_entity_type": "email", "start_offset": 583, "end_offset": 632, "source_line_start": 32, "source_line_end": 32, "source_hash": "579604deb26f", "reason": "malformed_email" },
+        { "ordinal": 10, "looks_like_entity_type": "account_number", "start_offset": 656, "end_offset": 694, "source_line_start": 35, "source_line_end": 35, "source_hash": "9c26e86fdb5d", "reason": "unlabeled_account_like_number" },
+        { "ordinal": 11, "looks_like_entity_type": "national_id_number", "start_offset": 725, "end_offset": 740, "source_line_start": 38, "source_line_end": 39, "source_hash": "49e840d0f6e3", "reason": "line_broken_identifier" }
+      ],
+      "expected_masked_text_sha256": "a638e785f99c116d2e9d205e6e0a8155349deaf2584641fd3ae74661ff18c27e",
+      "expected_document_warnings": [],
+      "manual_review_notes": [
+        "제12조(42행)는 person 밀집 경계 규칙을 전제로 오프셋을 계산함.",
+        "제7조·제8조는 모두 '탐지하지 않음'이 정답이며 broken_identifier로 기록함.",
+        "제9~11조는 이메일 형식 오류, 레이블 없는 계좌번호형 문자열, 줄바꿈으로 분리된 식별번호 사례를 각각 검증하기 위해 신규 추가됨.",
+        "exclusion ordinal 10은 실제 은행 계좌와 연결될 가능성을 낮추기 위해 반복형 합성 placeholder로 구성함.",
+        "exclusion ordinal 11은 두 줄에 걸친 후보 구간(하이픈 뒤 줄바꿈 포함)을 그대로 지정해 source_line_start(38)와 source_line_end(39)가 다름."
+      ]
+    }
+  ]
+}
