@@ -64,6 +64,15 @@ reports/
 exports/
 downloads/
 
+# spike generated data and raw outputs
+spikes/**/data/generated/
+spikes/**/outputs/raw/
+spikes/**/.env
+spikes/**/*.local.*
+!spikes/**/data/
+!spikes/**/data/fixtures/
+!spikes/**/data/fixtures/*.sample.*
+
 # private working notes
 private-docs/
 raw-notes/
