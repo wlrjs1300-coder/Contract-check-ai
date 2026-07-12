@@ -30,6 +30,8 @@ contract-check-ai/
 │   │       ├── v0.1.4-user-scenarios.md
 │   │       ├── v0.1.5-service-responsibility-policy.md
 │   │       └── v0.1.6-planning-alignment.md
+│   │   └── v0.2/
+│   │       └── v0.2.1-core-validation.md
 │   ├── planning/
 │   │   ├── service-overview.md
 │   │   ├── mvp-scope.md
@@ -46,6 +48,20 @@ contract-check-ai/
 │   ├── 07-adr-template.md
 │   ├── 08-review-workflow-rules.md
 │   └── 09-tech-stack.md
+├── spikes/
+│   └── v0.2.1-core-validation/
+│       ├── README.md
+│       ├── config/
+│       │   └── experiment.example.json
+│       ├── data/
+│       │   └── fixtures/
+│       │       ├── README.md
+│       │       ├── employment-contract-01.sample.txt
+│       │       └── employment-contract-02.sample.txt
+│       ├── schemas/
+│       │   └── result_schema.md
+│       └── scripts/
+│           └── generate_synthetic_data.py
 ├── .gitignore
 └── README_RULES.md
 ```
@@ -55,7 +71,29 @@ contract-check-ai/
 - `docs/03-security-rules.md`
 - `docs/04-public-records-rules.md`
 
-## 2.1 서비스 기획 문서 구조
+## 2.1 스파이크 구조
+
+v0.2.1 핵심 기술 스파이크는 제품 코드와 분리된 `spikes/` 아래에서 관리한다.
+
+현재 Git 추적 대상 스파이크 파일은 다음과 같다.
+
+- `spikes/v0.2.1-core-validation/README.md`
+- `spikes/v0.2.1-core-validation/config/experiment.example.json`
+- `spikes/v0.2.1-core-validation/schemas/result_schema.md`
+- `spikes/v0.2.1-core-validation/scripts/generate_synthetic_data.py`
+- `spikes/v0.2.1-core-validation/data/fixtures/README.md`
+- `spikes/v0.2.1-core-validation/data/fixtures/*.sample.txt`
+
+다음 경로는 Git 제외 대상이다.
+
+- `spikes/**/data/generated/`
+- `spikes/**/outputs/raw/`
+- `spikes/**/.env`
+- `spikes/**/*.local.*`
+
+스파이크 코드는 기술 검증을 위한 실험 기반 코드이며 제품 코드로 자동 승격되지 않는다. 실험 결과를 정식 설계나 제품 구현에 반영하려면 별도 검토, 문서화, PR이 필요하다.
+
+## 2.2 서비스 기획 문서 구조
 
 v0.1 서비스 기획 단계에서는 `docs/planning/`에 서비스 기획 산출물을 둔다.
 
