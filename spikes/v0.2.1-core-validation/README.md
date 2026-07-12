@@ -6,7 +6,9 @@ This directory contains the shared foundation for ContractCheck AI v0.2.1 core v
 
 v0.2.1 is not product feature implementation. It is a technical uncertainty reduction phase for later design decisions around clause splitting, personal data detection and masking, output safety, and AI provider policy review.
 
-This PR only creates the foundation structure. It does not implement actual clause splitting, personal data detection, masking, output filtering, provider adapters, or external AI calls.
+PR-1 created the foundation structure. PR-2 adds a local clause splitting experiment for synthetic TXT and simple JSON input only.
+
+This spike does not implement personal data detection, masking, output filtering, provider adapters, PDF extraction, or external AI calls.
 
 ## Scope
 
@@ -16,16 +18,17 @@ This foundation includes:
 - experiment purpose and execution rules
 - shared result schema
 - minimal synthetic data generator
-- two small non-sensitive fixture files
-- Git ignore rules for generated data and raw outputs
+- clause splitting experiment scripts
+- small non-sensitive fixture files
+- Git ignore rules for generated data, raw outputs, and summary outputs
 - v0.2.1 progress checklist
 
 ## PR Roadmap
 
 | PR | Scope | Status |
 |---|---|---|
-| PR-1 | Experiment foundation structure | Current PR |
-| PR-2 | Clause splitting validation | Future PR |
+| PR-1 | Experiment foundation structure | Completed |
+| PR-2 | Clause splitting validation | Current PR |
 | PR-3 | Personal data detection and masking | Future PR |
 | PR-4 | Masked contract analysis usefulness | Future PR |
 | PR-5 | Output safety validation | Future PR |
@@ -99,7 +102,50 @@ Generated files under `data/generated/` are local experiment artifacts and are i
 
 Raw outputs under `outputs/raw/` are also ignored by Git. Raw input and raw external responses must not be committed.
 
+Summary outputs under `outputs/summary/` are local execution artifacts and are ignored by Git.
+
 Tracked fixture files are limited to small `.sample.txt` files under `data/fixtures/`.
+
+## Clause Splitting Experiment
+
+PR-2 uses frozen expected data written before implementation:
+
+```text
+spikes/v0.2.1-core-validation/data/fixtures/clause-split-expected.sample.json
+```
+
+The expected file must not be changed to match implementation output. If observed output differs, adjust the splitter or record the limitation in the report.
+
+Run the splitter with a TXT fixture:
+
+```bash
+python spikes/v0.2.1-core-validation/scripts/clause_split/split_clauses.py --input spikes/v0.2.1-core-validation/data/fixtures/employment-contract-01.sample.txt
+```
+
+Run the splitter with a simple JSON input:
+
+```json
+{
+  "test_case_id": "example-case",
+  "text": "제1조 예시\n합성 본문"
+}
+```
+
+Evaluate all frozen fixture expectations:
+
+```bash
+python spikes/v0.2.1-core-validation/scripts/clause_split/evaluate_clause_split.py --expected spikes/v0.2.1-core-validation/data/fixtures/clause-split-expected.sample.json
+```
+
+The splitter writes both stdout and `--output` files as UTF-8 with LF line endings.
+On Windows PowerShell 5.1, shell redirection with `>` can re-encode native command output; use `--output` when a UTF-8/LF file artifact is required.
+The evaluator runs `split_clauses.py` through a subprocess and validates the actual CLI stdout path.
+
+Optional actual and summary outputs may be written under `outputs/summary/`, which is excluded from Git.
+
+The splitter is limited to UTF-8 TXT and simple JSON input. It does not read PDFs, call external AI, install packages, or process real contracts.
+
+The experiment preserves all non-whitespace source text in clauses, non-clause sections, or unclassified sections. This lossless source coverage is an experiment invariant for PR-2.
 
 ## Follow-up
 

@@ -57,11 +57,19 @@ contract-check-ai/
 │       │   └── fixtures/
 │       │       ├── README.md
 │       │       ├── employment-contract-01.sample.txt
-│       │       └── employment-contract-02.sample.txt
+│       │       ├── employment-contract-02.sample.txt
+│       │       ├── clause-split-edge-01.sample.txt
+│       │       ├── clause-split-edge-02.sample.txt
+│       │       └── clause-split-expected.sample.json
+│       ├── reports/
+│       │   └── pr-2-clause-split.md
 │       ├── schemas/
 │       │   └── result_schema.md
 │       └── scripts/
-│           └── generate_synthetic_data.py
+│           ├── generate_synthetic_data.py
+│           └── clause_split/
+│               ├── split_clauses.py
+│               └── evaluate_clause_split.py
 ├── .gitignore
 └── README_RULES.md
 ```
@@ -81,15 +89,24 @@ v0.2.1 핵심 기술 스파이크는 제품 코드와 분리된 `spikes/` 아래
 - `spikes/v0.2.1-core-validation/config/experiment.example.json`
 - `spikes/v0.2.1-core-validation/schemas/result_schema.md`
 - `spikes/v0.2.1-core-validation/scripts/generate_synthetic_data.py`
+- `spikes/v0.2.1-core-validation/scripts/clause_split/split_clauses.py`
+- `spikes/v0.2.1-core-validation/scripts/clause_split/evaluate_clause_split.py`
 - `spikes/v0.2.1-core-validation/data/fixtures/README.md`
 - `spikes/v0.2.1-core-validation/data/fixtures/*.sample.txt`
+- `spikes/v0.2.1-core-validation/data/fixtures/clause-split-expected.sample.json`
+- `spikes/v0.2.1-core-validation/reports/pr-2-clause-split.md`
+
+`spikes/**/reports/`는 각 스파이크의 검토·결론 보고서를 두는 경로이며, 계획된 실험 보고서는 Git 추적 대상으로 둘 수 있다.
 
 다음 경로는 Git 제외 대상이다.
 
 - `spikes/**/data/generated/`
 - `spikes/**/outputs/raw/`
+- `spikes/**/outputs/summary/`
 - `spikes/**/.env`
 - `spikes/**/*.local.*`
+
+`outputs/summary/`는 로컬 실행 결과 요약을 둘 수 있는 Git 제외 산출물 경로이며, 현재 Git 추적 구조로 표시하지 않는다.
 
 스파이크 코드는 기술 검증을 위한 실험 기반 코드이며 제품 코드로 자동 승격되지 않는다. 실험 결과를 정식 설계나 제품 구현에 반영하려면 별도 검토, 문서화, PR이 필요하다.
 
@@ -227,6 +244,9 @@ reports/
 exports/
 downloads/
 ```
+
+최상위 `reports/`는 로컬 보고서와 임시 산출물을 위한 경로이며 기본적으로 Git에 커밋하지 않는다.
+최상위 `reports/` 미커밋 정책은 `spikes/**/reports/`의 승인된 실험 보고서에는 적용되지 않는다.
 
 ## 9. 폴더 관리 원칙
 
