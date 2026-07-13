@@ -72,14 +72,37 @@ def _walk_for_forbidden_fields(value: Any, forbidden: set[str], path: str = "$")
 def validate_expected(expected: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     authorship = expected.get("authorship", {})
-    if expected.get("schema_version") != "0.2":
-        errors.append("schema_version must be 0.2")
-    if authorship.get("method") != "independent-human-authored-before-implementation":
-        errors.append("authorship.method mismatch")
-    if authorship.get("implementation_consulted") is not False:
-        errors.append("authorship.implementation_consulted must be false")
-    if authorship.get("status") != "approved-frozen-before-implementation":
-        errors.append("authorship.status mismatch")
+    schema_version = expected.get("schema_version")
+    if schema_version not in {"0.2", "0.3"}:
+        errors.append("schema_version must be 0.2 or 0.3")
+    if schema_version == "0.2":
+        if authorship.get("method") != "independent-human-authored-before-implementation":
+            errors.append("authorship.method mismatch")
+        if authorship.get("implementation_consulted") is not False:
+            errors.append("authorship.implementation_consulted must be false")
+        if authorship.get("status") != "approved-frozen-before-implementation":
+            errors.append("authorship.status mismatch")
+    if schema_version == "0.3":
+        if authorship.get("method") != "human-reviewed-corrective-criteria-before-fix":
+            errors.append("authorship.method mismatch")
+        if authorship.get("basis") != "manual-review-token-collision-discovery":
+            errors.append("authorship.basis mismatch")
+        if authorship.get("corrective_implementation_consulted") is not False:
+            errors.append("authorship.corrective_implementation_consulted must be false")
+        if authorship.get("status") != "approved-frozen-before-corrective-fix":
+            errors.append("authorship.status mismatch")
+        policy = expected.get("token_collision_policy")
+        if not isinstance(policy, dict):
+            errors.append("token_collision_policy must be present")
+        else:
+            if policy.get("preserve_preexisting_mask_tokens") is not True:
+                errors.append("token_collision_policy.preserve_preexisting_mask_tokens must be true")
+            if policy.get("reserve_preexisting_token_ordinals") is not True:
+                errors.append("token_collision_policy.reserve_preexisting_token_ordinals must be true")
+            if policy.get("new_tokens_must_not_reuse_reserved_ordinal") is not True:
+                errors.append("token_collision_policy.new_tokens_must_not_reuse_reserved_ordinal must be true")
+            if policy.get("reservation_scope") != "entity_type":
+                errors.append("token_collision_policy.reservation_scope must be entity_type")
 
     test_cases = expected.get("test_cases")
     if not isinstance(test_cases, list) or len(test_cases) != 4:
@@ -114,6 +137,8 @@ def validate_expected(expected: dict[str, Any]) -> list[str]:
         ):
             if field not in expected_case:
                 errors.append(f"{case_id}: missing expected.{field}")
+        if schema_version == "0.3" and "preexisting_token_collision_avoided" not in expected_case:
+            errors.append(f"{case_id}: missing expected.preexisting_token_collision_avoided")
 
         contract_check = case.get("contract_type_check")
         if contract_check and contract_check.get("applicable") is False:
@@ -223,6 +248,15 @@ def _automatic_checks(case: dict[str, Any], comparison: dict[str, Any]) -> list[
         )
     else:
         checks.append({"name": "contract_type_preserved", "passed": True, "status": "N/A"})
+
+    if "preexisting_token_collision_avoided" in expected:
+        checks.append(
+            {
+                "name": "preexisting_token_collision_avoided",
+                "passed": comparison["preexisting_token_collision"]["preexisting_token_collision_avoided"]
+                is expected["preexisting_token_collision_avoided"],
+            }
+        )
 
     context_results = comparison["required_context_results"]
     checks.append(

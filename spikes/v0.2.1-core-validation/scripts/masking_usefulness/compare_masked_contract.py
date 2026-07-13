@@ -308,7 +308,11 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
     source_path = REPO_ROOT / case["source_fixture"]
     source_text = read_fixture(source_path)
     normalized_source = DETECTOR.normalize_text(source_text)
-    masked_result = DETECTOR.detect_and_mask(normalized_source)
+    avoid_token_collisions = "preexisting_token_collision_avoided" in case.get("expected", {})
+    masked_result = DETECTOR.detect_and_mask(
+        normalized_source,
+        avoid_preexisting_token_collisions=avoid_token_collisions,
+    )
     masked_text = masked_result["masked_text"]
 
     source_split = SPLITTER.split_text(normalized_source, case["test_case_id"], "fixture")
@@ -355,6 +359,17 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
     )
     repeated = _repeated_token_consistency(masked_result["entities"])
     residual_count = len(DETECTOR.detect_entities(masked_text))
+    collision_metadata = {
+        "preexisting_token_count": masked_result.get("preexisting_token_count", 0),
+        "preexisting_token_collision_avoided": bool(masked_result.get("token_collision_avoided", True)),
+        "reserved_token_types": sorted(masked_result.get("highest_preexisting_ordinal_by_type", {}).keys()),
+        "collision_count": int(masked_result.get("reused_reserved_ordinal_count", 0))
+        + int(masked_result.get("preexisting_token_preservation_failures", 0)),
+        "reused_reserved_ordinal_count": int(masked_result.get("reused_reserved_ordinal_count", 0)),
+        "preexisting_token_preservation_failures": int(
+            masked_result.get("preexisting_token_preservation_failures", 0)
+        ),
+    }
 
     clause_count_preserved = source_clause_count == expected_count == masked_clause_count
     if no_clause_expected:
@@ -394,6 +409,7 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
             "same_value_conflicts": repeated["same_value_conflicts"],
             "distinct_value_conflicts": repeated["distinct_value_conflicts"],
         },
+        "preexisting_token_collision": collision_metadata,
         "required_context_results": required_context_results,
         "party_role_prescreen": party_role_results,
         "residual_detector_matches": residual_count,

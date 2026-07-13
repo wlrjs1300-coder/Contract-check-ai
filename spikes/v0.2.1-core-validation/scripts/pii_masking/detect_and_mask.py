@@ -74,6 +74,8 @@ NATIONAL_ID_RE = re.compile(r"\d{6}-\d{7}")
 BUSINESS_NUMBER_RE = re.compile(r"\d{3}-\d{2}-\d{5}")
 ACCOUNT_NUMBER_RE = re.compile(r"\d{3}-\d{4}-\d{4}")
 MASK_TOKEN_RE = re.compile(r"^\[[A-Z_]+_\d+\]$")
+MASK_TOKEN_SPAN_RE = re.compile(r"\[([A-Z_]+)_(\d+)\]")
+ENTITY_TYPE_BY_PREFIX = {prefix: entity_type for entity_type, prefix in MASK_PREFIXES.items()}
 
 
 @dataclass(order=True)
@@ -207,7 +209,39 @@ def _overlaps(a: Candidate, b: Candidate) -> bool:
     return max(a.start_offset, b.start_offset) < min(a.end_offset, b.end_offset)
 
 
-def _deduplicate_and_resolve(candidates: list[Candidate]) -> list[Candidate]:
+def find_preexisting_mask_tokens(text: str) -> list[dict[str, Any]]:
+    """Find already-masked token spans without treating them as PII entities."""
+    normalized = normalize_text(text)
+    tokens: list[dict[str, Any]] = []
+    for match in MASK_TOKEN_SPAN_RE.finditer(normalized):
+        prefix, ordinal_text = match.groups()
+        entity_type = ENTITY_TYPE_BY_PREFIX.get(prefix)
+        if entity_type is None:
+            continue
+        ordinal = int(ordinal_text)
+        if ordinal <= 0:
+            continue
+        start, end = match.span()
+        tokens.append(
+            {
+                "entity_type": entity_type,
+                "ordinal": ordinal,
+                "start_offset": start,
+                "end_offset": end,
+                "token": match.group(0),
+            }
+        )
+    return tokens
+
+
+def _overlaps_span(candidate: Candidate, span: dict[str, Any]) -> bool:
+    return max(candidate.start_offset, span["start_offset"]) < min(candidate.end_offset, span["end_offset"])
+
+
+def _deduplicate_and_resolve(
+    candidates: list[Candidate],
+    protected_spans: list[dict[str, Any]] | None = None,
+) -> list[Candidate]:
     priority = {
         "person": 10,
         "address": 10,
@@ -219,6 +253,7 @@ def _deduplicate_and_resolve(candidates: list[Candidate]) -> list[Candidate]:
         "email": 7,
     }
     selected: list[Candidate] = []
+    protected = protected_spans or []
     for candidate in sorted(
         candidates,
         key=lambda c: (
@@ -228,6 +263,8 @@ def _deduplicate_and_resolve(candidates: list[Candidate]) -> list[Candidate]:
             c.detection_order,
         ),
     ):
+        if any(_overlaps_span(candidate, span) for span in protected):
+            continue
         duplicate = any(
             candidate.start_offset == existing.start_offset
             and candidate.end_offset == existing.end_offset
@@ -249,9 +286,13 @@ def _dense_cluster_lines(candidates: list[Candidate]) -> set[int]:
     return {line for line, count in line_counts.items() if count >= 3}
 
 
-def detect_entities(text: str) -> list[dict[str, Any]]:
+def detect_entities(
+    text: str,
+    avoid_preexisting_token_collisions: bool = False,
+) -> list[dict[str, Any]]:
     """Detect supported synthetic PII entities without returning raw values."""
     normalized = normalize_text(text)
+    preexisting_tokens = find_preexisting_mask_tokens(normalized) if avoid_preexisting_token_collisions else []
     candidates: list[Candidate] = []
     order = 0
 
@@ -273,7 +314,7 @@ def detect_entities(text: str) -> list[dict[str, Any]]:
         new_candidates, order = _regex_candidates(normalized, pattern, entity_type, order)
         candidates.extend(new_candidates)
 
-    resolved = _deduplicate_and_resolve(candidates)
+    resolved = _deduplicate_and_resolve(candidates, preexisting_tokens)
     dense_lines = _dense_cluster_lines(resolved)
 
     entities: list[dict[str, Any]] = []
@@ -294,12 +335,28 @@ def detect_entities(text: str) -> list[dict[str, Any]]:
                 "warnings": warnings,
             }
         )
-    return assign_mask_tokens(normalized, entities)
+    return assign_mask_tokens(normalized, entities, preexisting_tokens)
 
 
-def assign_mask_tokens(text: str, entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _highest_preexisting_ordinal_by_type(
+    preexisting_tokens: list[dict[str, Any]],
+) -> dict[str, int]:
+    highest = {entity_type: 0 for entity_type in MASK_PREFIXES}
+    for token in preexisting_tokens:
+        entity_type = token["entity_type"]
+        highest[entity_type] = max(highest[entity_type], token["ordinal"])
+    return highest
+
+
+def assign_mask_tokens(
+    text: str,
+    entities: list[dict[str, Any]],
+    preexisting_tokens: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Assign stable per-type mask tokens without persisting raw values."""
-    next_number = {entity_type: 1 for entity_type in MASK_PREFIXES}
+    existing_tokens = preexisting_tokens or []
+    highest_existing = _highest_preexisting_ordinal_by_type(existing_tokens)
+    next_number = {entity_type: highest + 1 for entity_type, highest in highest_existing.items()}
     token_by_value: dict[tuple[str, str], str] = {}
     assigned: list[dict[str, Any]] = []
 
@@ -337,10 +394,30 @@ def mask_text(text: str, entities: list[dict[str, Any]]) -> str:
     return "".join(parts)
 
 
-def detect_and_mask(text: str) -> dict[str, Any]:
+def detect_and_mask(
+    text: str,
+    avoid_preexisting_token_collisions: bool = False,
+) -> dict[str, Any]:
     normalized = normalize_text(text)
-    entities = detect_entities(normalized)
+    preexisting_tokens = find_preexisting_mask_tokens(normalized) if avoid_preexisting_token_collisions else []
+    entities = detect_entities(normalized, avoid_preexisting_token_collisions)
     masked = mask_text(normalized, entities)
+    highest_existing = _highest_preexisting_ordinal_by_type(preexisting_tokens)
+    reserved_ordinals_by_type = {
+        MASK_PREFIXES[entity_type]: highest
+        for entity_type, highest in highest_existing.items()
+        if highest > 0
+    }
+    reused_reserved = 0
+    for entity in entities:
+        prefix = MASK_PREFIXES[entity["entity_type"]]
+        highest = reserved_ordinals_by_type.get(prefix, 0)
+        token_number = int(entity["mask_token"].rsplit("_", 1)[1].rstrip("]"))
+        if highest and token_number <= highest:
+            reused_reserved += 1
+    preservation_failures = sum(
+        1 for token in preexisting_tokens if normalized[token["start_offset"] : token["end_offset"]] not in masked
+    )
     document_warnings: list[str] = []
     if not entities:
         document_warnings.append("no_pii_detected")
@@ -349,6 +426,11 @@ def detect_and_mask(text: str) -> dict[str, Any]:
         "masked_text": masked,
         "masked_text_sha256": hashlib.sha256(masked.encode("utf-8")).hexdigest(),
         "document_warnings": document_warnings,
+        "preexisting_token_count": len(preexisting_tokens),
+        "highest_preexisting_ordinal_by_type": reserved_ordinals_by_type,
+        "token_collision_avoided": reused_reserved == 0 and preservation_failures == 0,
+        "preexisting_token_preservation_failures": preservation_failures,
+        "reused_reserved_ordinal_count": reused_reserved,
     }
 
 
