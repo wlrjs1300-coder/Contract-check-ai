@@ -60,16 +60,25 @@ contract-check-ai/
 │       │       ├── employment-contract-02.sample.txt
 │       │       ├── clause-split-edge-01.sample.txt
 │       │       ├── clause-split-edge-02.sample.txt
-│       │       └── clause-split-expected.sample.json
+│       │       ├── clause-split-expected.sample.json
+│       │       ├── pii-employment-01.sample.txt
+│       │       ├── pii-employment-02.sample.txt
+│       │       ├── pii-edge-01.sample.txt
+│       │       ├── pii-edge-02.sample.txt
+│       │       └── pii-masking-expected.sample.json
 │       ├── reports/
-│       │   └── pr-2-clause-split.md
+│       │   ├── pr-2-clause-split.md
+│       │   └── pr-3-pii-masking.md
 │       ├── schemas/
 │       │   └── result_schema.md
 │       └── scripts/
 │           ├── generate_synthetic_data.py
-│           └── clause_split/
+│           ├── clause_split/
 │               ├── split_clauses.py
 │               └── evaluate_clause_split.py
+│           └── pii_masking/
+│               ├── detect_and_mask.py
+│               └── evaluate_pii_masking.py
 ├── .gitignore
 └── README_RULES.md
 ```
