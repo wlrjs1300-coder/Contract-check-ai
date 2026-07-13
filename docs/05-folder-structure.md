@@ -91,10 +91,14 @@ v0.2.1 핵심 기술 스파이크는 제품 코드와 분리된 `spikes/` 아래
 - `spikes/v0.2.1-core-validation/scripts/generate_synthetic_data.py`
 - `spikes/v0.2.1-core-validation/scripts/clause_split/split_clauses.py`
 - `spikes/v0.2.1-core-validation/scripts/clause_split/evaluate_clause_split.py`
+- `spikes/v0.2.1-core-validation/scripts/pii_masking/detect_and_mask.py`
+- `spikes/v0.2.1-core-validation/scripts/pii_masking/evaluate_pii_masking.py`
 - `spikes/v0.2.1-core-validation/data/fixtures/README.md`
 - `spikes/v0.2.1-core-validation/data/fixtures/*.sample.txt`
 - `spikes/v0.2.1-core-validation/data/fixtures/clause-split-expected.sample.json`
+- `spikes/v0.2.1-core-validation/data/fixtures/pii-masking-expected.sample.json`
 - `spikes/v0.2.1-core-validation/reports/pr-2-clause-split.md`
+- `spikes/v0.2.1-core-validation/reports/pr-3-pii-masking.md`
 
 `spikes/**/reports/`는 각 스파이크의 검토·결론 보고서를 두는 경로이며, 계획된 실험 보고서는 Git 추적 대상으로 둘 수 있다.
 
