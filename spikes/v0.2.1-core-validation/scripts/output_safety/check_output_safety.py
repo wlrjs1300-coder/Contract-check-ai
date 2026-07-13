@@ -59,6 +59,7 @@ NEGATION_TERMS = (
 )
 META_CONTEXT_TERMS = ("source_quote", "예시를 설명", "설명 목적", "분석 문장", "포함된 표현")
 MIXED_CONTEXT_TERMS = ("혼합", "인용과 판단")
+CONTRASTIVE_TERMS = ("하지만", "그러나", "다만", "반면", "이지만", "으나")
 
 
 def configure_stdio() -> None:
@@ -149,16 +150,16 @@ def classify_field(text_role: str, text: str) -> dict[str, Any]:
         return classify_generated_text(text, text_role, default_categories=["cautious_language"])
 
     if text_role == "disclaimer":
-        if has_contract_decision_certainty(text):
-            return _result(BLOCK, ["legal_certainty", "unsupported_certainty"], "block_result",
-                           ["LEGAL_CERTAINTY", "UNSUPPORTED_CERTAINTY"], "blocked_legal_certainty")
-        return _result(ALLOW, ["uncertainty_disclosure"], "pass", ["DISCLAIMER_NON_ADVICE"],
-                       "allowed_uncertainty_disclosure")
+        return classify_disclaimer(text)
 
     raise ValueError(f"unsupported text role: {text_role}")
 
 
 def classify_generated_text(text: str, text_role: str, default_categories: list[str]) -> dict[str, Any]:
+    block_result = classify_blocking_expression(text, text_role)
+    if block_result:
+        return block_result
+
     if has_mixed_context(text) and text_role == "summary":
         return _result(REVIEW, ["mixed_context"], "require_manual_review", ["MIXED_CONTEXT"],
                        "review_mixed_context")
@@ -186,6 +187,22 @@ def classify_generated_text(text: str, text_role: str, default_categories: list[
         return _result(ALLOW, ["negated_prohibited_expression"], "pass", ["NEGATED_PROHIBITED_EXPRESSION"],
                        "allowed_negated_prohibited_expression")
 
+    return _result(ALLOW, default_categories, "pass", [category_to_rule(item) for item in default_categories],
+                   "allowed_cautious_language")
+
+
+def classify_disclaimer(text: str) -> dict[str, Any]:
+    block_result = classify_blocking_expression(text, "disclaimer")
+    if block_result:
+        return block_result
+    if has_contract_decision_certainty(text):
+        return _result(BLOCK, ["legal_certainty", "unsupported_certainty"], "block_result",
+                       ["LEGAL_CERTAINTY", "UNSUPPORTED_CERTAINTY"], "blocked_legal_certainty")
+    return _result(ALLOW, ["uncertainty_disclosure"], "pass", ["DISCLAIMER_NON_ADVICE"],
+                   "allowed_uncertainty_disclosure")
+
+
+def classify_blocking_expression(text: str, text_role: str) -> dict[str, Any] | None:
     if has_illegality_determination(text):
         return _result(BLOCK, ["illegality_determination"], "block_result",
                        ["LEGAL_CERTAINTY_ILLEGALITY"], "blocked_illegality_determination")
@@ -216,9 +233,7 @@ def classify_generated_text(text: str, text_role: str, default_categories: list[
     if has_legal_effect_certainty(text):
         return _result(BLOCK, ["legal_certainty"], "block_result", ["LEGAL_CERTAINTY"],
                        "blocked_legal_certainty")
-
-    return _result(ALLOW, default_categories, "pass", [category_to_rule(item) for item in default_categories],
-                   "allowed_cautious_language")
+    return None
 
 
 def has_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -231,6 +246,16 @@ def has_sentence_certainty(text: str) -> bool:
 
 def has_negated_expression(text: str) -> bool:
     return has_any(text, NEGATION_TERMS)
+
+
+def meaning_segments(text: str) -> list[str]:
+    segments = [text]
+    for term in CONTRASTIVE_TERMS:
+        next_segments: list[str] = []
+        for segment in segments:
+            next_segments.extend(part.strip() for part in segment.split(term))
+        segments = [segment for segment in next_segments if segment]
+    return segments
 
 
 def has_meta_explanation(text: str) -> bool:
@@ -247,6 +272,10 @@ def has_mixed_context(text: str) -> bool:
 
 
 def has_illegality_determination(text: str) -> bool:
+    return any(has_illegality_determination_segment(segment) for segment in meaning_segments(text))
+
+
+def has_illegality_determination_segment(text: str) -> bool:
     if has_negated_expression(text):
         return False
     return has_any(text, ILLEGALITY_TERMS) and (
@@ -256,6 +285,10 @@ def has_illegality_determination(text: str) -> bool:
 
 
 def has_invalidity_determination(text: str) -> bool:
+    return any(has_invalidity_determination_segment(segment) for segment in meaning_segments(text))
+
+
+def has_invalidity_determination_segment(text: str) -> bool:
     if has_negated_expression(text):
         return False
     return has_any(text, INVALIDITY_TERMS) and (
@@ -265,12 +298,20 @@ def has_invalidity_determination(text: str) -> bool:
 
 
 def has_legal_effect_certainty(text: str) -> bool:
+    return any(has_legal_effect_certainty_segment(segment) for segment in meaning_segments(text))
+
+
+def has_legal_effect_certainty_segment(text: str) -> bool:
     if has_negated_expression(text):
         return False
     return has_any(text, LEGAL_EFFECT_TERMS) and ("없습니다" in text or has_sentence_certainty(text))
 
 
 def has_legal_safety_guarantee(text: str) -> bool:
+    return any(has_legal_safety_guarantee_segment(segment) for segment in meaning_segments(text))
+
+
+def has_legal_safety_guarantee_segment(text: str) -> bool:
     if has_negated_expression(text):
         return False
     return has_any(text, LEGAL_SAFETY_TERMS) and (
@@ -281,24 +322,40 @@ def has_legal_safety_guarantee(text: str) -> bool:
 
 
 def has_litigation_outcome_guarantee(text: str) -> bool:
+    return any(has_litigation_outcome_guarantee_segment(segment) for segment in meaning_segments(text))
+
+
+def has_litigation_outcome_guarantee_segment(text: str) -> bool:
     if has_negated_expression(text):
         return False
     return ("소송" in text or "재판" in text) and has_any(text, ("승소", "이깁니다")) and has_sentence_certainty(text)
 
 
 def has_refund_guarantee(text: str) -> bool:
+    return any(has_refund_guarantee_segment(segment) for segment in meaning_segments(text))
+
+
+def has_refund_guarantee_segment(text: str) -> bool:
     if has_negated_expression(text):
         return False
     return has_any(text, REFUND_TERMS) and has_sentence_certainty(text)
 
 
 def has_outcome_guarantee(text: str) -> bool:
+    return any(has_outcome_guarantee_segment(segment) for segment in meaning_segments(text))
+
+
+def has_outcome_guarantee_segment(text: str) -> bool:
     if has_negated_expression(text):
         return False
     return has_any(text, OUTCOME_TERMS) and has_sentence_certainty(text)
 
 
 def has_contract_decision_certainty(text: str) -> bool:
+    return any(has_contract_decision_certainty_segment(segment) for segment in meaning_segments(text))
+
+
+def has_contract_decision_certainty_segment(text: str) -> bool:
     if has_negated_expression(text):
         return False
     return ("계약" in text or "결과" in text) and has_sentence_certainty(text)
