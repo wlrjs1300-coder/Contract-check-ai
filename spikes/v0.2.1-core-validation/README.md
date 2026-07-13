@@ -6,9 +6,9 @@ This directory contains the shared foundation for ContractCheck AI v0.2.1 core v
 
 v0.2.1 is not product feature implementation. It is a technical uncertainty reduction phase for later design decisions around clause splitting, personal data detection and masking, output safety, and AI provider policy review.
 
-PR-1 created the foundation structure. PR-2 adds a local clause splitting experiment for synthetic TXT and simple JSON input only. PR-3 adds a local deterministic personal data detection and masking experiment for frozen synthetic TXT fixtures.
+PR-1 created the foundation structure. PR-2 adds a local clause splitting experiment for synthetic TXT and simple JSON input only. PR-3 adds a local deterministic personal data detection and masking experiment for frozen synthetic TXT fixtures. PR-5 adds local output safety validation for synthetic user-visible analysis output.
 
-This spike does not implement output filtering, provider adapters, PDF extraction, or external AI calls.
+This spike does not implement provider adapters, PDF extraction, or external AI calls.
 
 ## Scope
 
@@ -20,6 +20,7 @@ This foundation includes:
 - minimal synthetic data generator
 - clause splitting experiment scripts
 - personal data detection and masking experiment scripts
+- output safety validation experiment scripts
 - small non-sensitive fixture files
 - local spike reports
 - Git ignore rules for generated data, raw outputs, and summary outputs
@@ -32,8 +33,8 @@ This foundation includes:
 | PR-1 | Experiment foundation structure | Completed |
 | PR-2 | Clause splitting validation | Completed |
 | PR-3 | Personal data detection and masking | Completed locally |
-| PR-4 | Masked contract analysis usefulness | Future PR |
-| PR-5 | Output safety validation | Future PR |
+| PR-4 | Masked contract analysis usefulness | Completed |
+| PR-5 | Output safety validation | Completed / PASS |
 | PR-6 | AI provider policy review and final decision | Future PR |
 
 PDF extraction comparison and external AI experiments are not included in the six PRs above. They remain separate follow-up candidates if needed.
@@ -195,6 +196,44 @@ spikes/v0.2.1-core-validation/reports/pr-3-pii-masking.md
 This experiment uses synthetic fixtures only. It does not approve real personal data handling, real contract processing, external AI transfer, or production service release.
 
 If `detect_and_mask.py --output` is used, it writes masked JSON only when the user explicitly provides the option. Real data storage and retention rules remain a separate design concern.
+
+## Output Safety Validation Experiment
+
+PR-5 uses frozen corrective expected data written before corrective implementation:
+
+```text
+spikes/v0.2.1-core-validation/data/fixtures/output-safety-expected.v0.2.sample.json
+```
+
+Run the PR-5 evaluator:
+
+```bash
+python spikes/v0.2.1-core-validation/scripts/output_safety/evaluate_output_safety.py
+```
+
+The current local validation result is:
+
+```text
+Output safety evaluation: PASS
+test_cases: 4/4
+fields: 48/48
+allow: 30
+block: 15
+review: 3
+all mismatches: 0
+raw_text_exposure: 0
+deterministic_mismatches: 0
+```
+
+The PR-5 report is stored at:
+
+```text
+spikes/v0.2.1-core-validation/reports/pr-5-output-safety-validation-report.md
+```
+
+This experiment validates rule-based output safety behavior for synthetic user-visible analysis output only. It does not approve production use, real contract processing, external AI transfer, or legal safety.
+
+The next planned spike is PR-6 provider policy review and final v0.2.1 technical decision.
 
 ## Follow-up
 
