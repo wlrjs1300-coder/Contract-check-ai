@@ -14,6 +14,87 @@ BLOCK = "BLOCK"
 ALLOW = "ALLOW"
 REVIEW = "REVIEW"
 
+LEGAL_SAFETY_TERMS = ["법적으로 안전", "아무 문제", "문제 없음", "�������� ����", "�ƹ� ������"]
+ILLEGALITY_TERMS = ["불법", "위법", "�ҹ�", "����"]
+INVALIDITY_TERMS = ["무효", "��ȿ"]
+LEGAL_EFFECT_TERMS = ["법적 효력", "���� ȿ��"]
+OUTCOME_TERMS = ["승소", "이깁니다", "반환", "환급", "손해배상", "보상", "�¼�", "��ȯ", "ȯ��", "���ع��"]
+REFUND_TERMS = ["보증금", "반환", "환급", "��������", "��ȯ", "ȯ��"]
+CERTAINTY_TERMS = [
+    "반드시",
+    "무조건",
+    "확실히",
+    "분명히",
+    "보장합니다",
+    "보장됩니다",
+    "확정합니다",
+    "입니다",
+    "합니다",
+    "없습니다",
+    "틀림없습니다",
+    "받을 수 있습니다",
+    "�ݵ��",
+    "������",
+    "Ȯ����",
+    "�и���",
+    "��������",
+    "Ȯ���մϴ�",
+    "�Դϴ�",
+    "�մϴ�",
+    "�����ϴ�",
+    "Ʋ�����ϴ�",
+    "���� �� �ֽ��ϴ�",
+]
+NEGATED_TERMS = [
+    "단정할 수 없습니다",
+    "확정할 수 없습니다",
+    "보장하지 않습니다",
+    "볼 수 없습니다",
+    "확정하지 않습니다",
+    "확정하기 어렵습니다",
+    "달라질 수 있습니다",
+    "������ �� �����ϴ�",
+    "Ȯ���� �� �����ϴ�",
+    "�������� �ʽ��ϴ�",
+    "�� �� �����ϴ�",
+    "Ȯ������ �ʽ��ϴ�",
+    "Ȯ���ϱ� ��ƽ��ϴ�",
+    "�޶��� �� �ֽ��ϴ�",
+]
+META_TERMS = ["source_quote", "예시를 설명", "분석 문장", "포함된 표현", "���ø� ����", "�м� ����", "���Ե� ǥ��"]
+MIXED_TERMS = ["혼합", "인용과 판단", "ȥ��", "�ο�� �Ǵ�"]
+DIRECT_ACTION_TERMS = [
+    "계약을 해지하세요",
+    "계약을 종료하세요",
+    "소송을 제기하세요",
+    "소송을 진행하세요",
+    "지급을 거부하세요",
+    "서명하지 마세요",
+    "체결하지 마세요",
+    "��� ����� ����",
+    "�Ҽ��� ����",
+    "�Ҽ��� �����ϼ���",
+    "�ٷ� �Ҽ�",
+    "������ �ź�",
+]
+EXPERT_DISMISSAL_TERMS = [
+    "검토할 필요가 없습니다",
+    "확인하지 않아도 됩니다",
+    "변호사가 필요 없습니다",
+    "전문가 검토는 불필요합니다",
+    "전문가에게 확인할 필요는 없습니다",
+    "Ȯ������ �ʾƵ�",
+    "Ȯ���� �ʿ� ��",
+    "Ȯ���� �ʿ�� ��",
+]
+EXPERT_RECOMMENDATION_TERMS = [
+    "전문가 검토를 권장합니다",
+    "변호사에게 확인해 보세요",
+    "전문가와 상담해 보세요",
+    "������ ������ �����մϴ�",
+    "����翡�� Ȯ���� ���ּ���",
+]
+
 
 def configure_stdio() -> None:
     if hasattr(sys.stdout, "reconfigure"):
@@ -75,91 +156,186 @@ def _append_text_field(fields: list[tuple[str, str, str]], field_path: str, role
 
 def classify_field(text_role: str, text: str) -> dict[str, Any]:
     if text_role == "source_quote":
-        if "'" in text:
+        if has_prohibited_language(text):
             return _result(REVIEW, ["quoted_source_language", "mixed_context"], "require_manual_review",
                            ["SOURCE_QUOTE_PROHIBITED_LANGUAGE"], "review_quoted_prohibited_language")
         return _result(ALLOW, ["quoted_source_language"], "pass", ["SOURCE_QUOTE_LANGUAGE"],
                        "allowed_quoted_source_language")
 
     if text_role == "summary":
-        if "아무 문제가" in text or "법적으로 안전" in text:
+        if has_legal_safety_guarantee(text):
             return _result(BLOCK, ["legal_safety_guarantee", "unsupported_certainty"], "block_result",
                            ["LEGAL_SAFETY_GUARANTEE", "UNSUPPORTED_CERTAINTY"], "blocked_legal_safety_guarantee")
-        if "혼합" in text:
+        if has_mixed_context(text):
             return _result(REVIEW, ["mixed_context"], "require_manual_review", ["MIXED_CONTEXT"],
                            "review_mixed_context")
-        if "포함된 표현" in text and "분석 문장" in text:
+        if has_meta_explanation(text):
             return _result(ALLOW, ["meta_explanation"], "pass", ["META_EXPLANATION"],
                            "allowed_meta_explanation")
         return _result(ALLOW, ["cautious_language", "uncertainty_disclosure"], "pass",
                        ["CAUTIOUS_LANGUAGE", "UNCERTAINTY_DISCLOSURE"], "allowed_cautious_language")
 
     if text_role == "disclaimer":
-        if "확정합니다" in text:
+        if has_legal_certainty(text) or (has_any(text, CERTAINTY_TERMS) and not has_negated_expression(text)):
             return _result(BLOCK, ["legal_certainty", "unsupported_certainty"], "block_result",
                            ["LEGAL_CERTAINTY", "UNSUPPORTED_CERTAINTY"], "blocked_legal_certainty")
         return _result(ALLOW, ["uncertainty_disclosure"], "pass", ["DISCLAIMER_NON_ADVICE"],
                        "allowed_uncertainty_disclosure")
 
     if text_role == "analysis":
-        if "불법입니다" in text:
+        if has_negated_expression(text) and not has_blocking_expression(text):
+            categories = ["negated_prohibited_expression"]
+            if has_legal_conclusion_uncertainty(text):
+                categories.append("uncertainty_disclosure")
+            if has_meta_explanation(text):
+                categories.insert(0, "meta_explanation")
+            reason_code = "allowed_meta_explanation" if "meta_explanation" in categories else "allowed_negated_prohibited_expression"
+            return _result(ALLOW, categories, "pass", [category_to_rule(item) for item in categories], reason_code)
+        if has_illegality_determination(text):
             return _result(BLOCK, ["illegality_determination"], "block_result",
                            ["LEGAL_CERTAINTY_ILLEGALITY"], "blocked_illegality_determination")
-        if "위법입니다" in text:
-            return _result(BLOCK, ["illegality_determination"], "block_result",
-                           ["LEGAL_CERTAINTY_ILLEGALITY"], "blocked_illegality_determination")
-        if "소송하면" in text and "승소" in text:
+        if has_litigation_outcome_guarantee(text):
             return _result(BLOCK, ["litigation_outcome_guarantee", "outcome_guarantee"], "block_result",
                            ["LITIGATION_OUTCOME_GUARANTEE", "OUTCOME_GUARANTEE"], "blocked_litigation_outcome")
-        if "무효입니다" in text:
+        if has_invalidity_determination(text):
             return _result(BLOCK, ["invalidity_determination"], "block_result",
                            ["LEGAL_CERTAINTY_INVALIDITY"], "blocked_invalidity_determination")
-        if "무효라고 확정할 수 없습니다" in text or "승소를 보장하지 않습니다" in text:
-            return _result(ALLOW, ["negated_prohibited_expression"], "pass", ["NEGATED_PROHIBITED_EXPRESSION"],
-                           "allowed_negated_prohibited_expression")
-        if "인용문" in text and "확정하지 않습니다" in text:
-            return _result(ALLOW, ["negated_prohibited_expression", "uncertainty_disclosure"], "pass",
-                           ["NEGATED_PROHIBITED_EXPRESSION", "UNCERTAINTY_DISCLOSURE"],
-                           "allowed_negated_prohibited_expression")
-        if "예시를 설명" in text and "보장하지 않습니다" in text:
-            return _result(ALLOW, ["meta_explanation", "negated_prohibited_expression"], "pass",
-                           ["META_EXPLANATION", "NEGATED_PROHIBITED_EXPRESSION"],
-                           "allowed_meta_explanation")
         return _result(ALLOW, ["cautious_language"], "pass", ["CAUTIOUS_LANGUAGE"], "allowed_cautious_language")
 
     if text_role == "reason":
-        if "법적 효력이 없습니다" in text:
-            return _result(BLOCK, ["legal_certainty"], "block_result", ["LEGAL_CERTAINTY"],
-                           "blocked_legal_certainty")
-        if "보증금은 반드시" in text:
-            return _result(BLOCK, ["refund_guarantee", "outcome_guarantee"], "block_result",
-                           ["REFUND_GUARANTEE", "OUTCOME_GUARANTEE"], "blocked_refund_guarantee")
-        if "손해배상" in text:
-            return _result(BLOCK, ["outcome_guarantee"], "block_result", ["OUTCOME_GUARANTEE"],
-                           "blocked_outcome_guarantee")
-        if "법적으로 안전합니다" in text:
+        if has_negated_expression(text) and not has_blocking_expression(text):
+            return _result(ALLOW, ["cautious_language", "uncertainty_disclosure"], "pass",
+                           ["CAUTIOUS_LANGUAGE", "UNCERTAINTY_DISCLOSURE"], "allowed_uncertainty_disclosure")
+        if has_legal_safety_guarantee(text):
             return _result(BLOCK, ["legal_safety_guarantee"], "block_result", ["LEGAL_SAFETY_GUARANTEE"],
                            "blocked_legal_safety_guarantee")
-        if "source_quote" in text:
+        if has_refund_guarantee(text):
+            return _result(BLOCK, ["refund_guarantee", "outcome_guarantee"], "block_result",
+                           ["REFUND_GUARANTEE", "OUTCOME_GUARANTEE"], "blocked_refund_guarantee")
+        if has_outcome_guarantee(text):
+            return _result(BLOCK, ["outcome_guarantee"], "block_result", ["OUTCOME_GUARANTEE"],
+                           "blocked_outcome_guarantee")
+        if has_legal_certainty(text):
+            return _result(BLOCK, ["legal_certainty"], "block_result", ["LEGAL_CERTAINTY"],
+                           "blocked_legal_certainty")
+        if has_meta_explanation(text):
             return _result(ALLOW, ["meta_explanation"], "pass", ["META_EXPLANATION"],
                            "allowed_meta_explanation")
-        if "인용과 판단" in text:
+        if has_mixed_context(text):
             return _result(ALLOW, ["mixed_context"], "pass", ["MIXED_CONTEXT"], "allowed_mixed_context")
-        if "어렵" in text:
+        if has_uncertainty_disclosure(text):
             return _result(ALLOW, ["cautious_language", "uncertainty_disclosure"], "pass",
                            ["CAUTIOUS_LANGUAGE", "UNCERTAINTY_DISCLOSURE"], "allowed_uncertainty_disclosure")
         return _result(ALLOW, ["cautious_language"], "pass", ["CAUTIOUS_LANGUAGE"], "allowed_cautious_language")
 
     if text_role == "recommended_action":
-        if "즉시 계약을 해지" in text or "바로 소송" in text or "지급을 거부" in text:
+        if has_direct_legal_action(text):
             return _result(BLOCK, ["direct_legal_action_instruction"], "block_result",
                            ["DIRECT_LEGAL_ACTION"], "blocked_direct_action")
-        if "확인하지 않아도" in text or "확인이 필요 없" in text or "확인할 필요는 없" in text:
+        if has_expert_review_dismissal(text):
             return _result(BLOCK, ["expert_review_dismissal"], "block_result", ["EXPERT_REVIEW_DISMISSAL"],
                            "blocked_expert_review_dismissal")
+        if has_expert_review_recommendation(text):
+            return _result(ALLOW, ["expert_review_recommendation"], "pass", ["EXPERT_REVIEW_RECOMMENDATION"],
+                           "allowed_expert_review_recommendation")
         return _result(ALLOW, ["cautious_language"], "pass", ["CAUTIOUS_LANGUAGE"], "allowed_cautious_language")
 
     raise ValueError(f"unsupported text role: {text_role}")
+
+
+def has_any(text: str, terms: list[str]) -> bool:
+    return any(term in text for term in terms)
+
+
+def has_prohibited_language(text: str) -> bool:
+    return (
+        has_legal_safety_guarantee(text)
+        or has_illegality_determination(text)
+        or has_invalidity_determination(text)
+        or has_litigation_outcome_guarantee(text)
+        or has_refund_guarantee(text)
+        or has_outcome_guarantee(text)
+        or has_legal_certainty(text)
+    )
+
+
+def has_blocking_expression(text: str) -> bool:
+    return (
+        has_illegality_determination(text)
+        or has_invalidity_determination(text)
+        or has_litigation_outcome_guarantee(text)
+        or has_refund_guarantee(text)
+        or has_outcome_guarantee(text)
+        or has_legal_safety_guarantee(text)
+    )
+
+
+def has_legal_safety_guarantee(text: str) -> bool:
+    return has_any(text, LEGAL_SAFETY_TERMS) and not has_negated_expression(text)
+
+
+def has_illegality_determination(text: str) -> bool:
+    return has_any(text, ILLEGALITY_TERMS) and has_any(text, CERTAINTY_TERMS) and not has_negated_expression(text)
+
+
+def has_invalidity_determination(text: str) -> bool:
+    return has_any(text, INVALIDITY_TERMS) and has_any(text, CERTAINTY_TERMS) and not has_negated_expression(text)
+
+
+def has_litigation_outcome_guarantee(text: str) -> bool:
+    return has_any(text, ["소송", "재판", "�Ҽ�", "���"]) and has_any(text, ["승소", "�¼�"]) and has_any(text, CERTAINTY_TERMS) and not has_negated_expression(text)
+
+
+def has_refund_guarantee(text: str) -> bool:
+    return has_any(text, REFUND_TERMS) and has_any(text, CERTAINTY_TERMS) and not has_negated_expression(text)
+
+
+def has_outcome_guarantee(text: str) -> bool:
+    return has_any(text, OUTCOME_TERMS) and has_any(text, CERTAINTY_TERMS) and not has_negated_expression(text)
+
+
+def has_legal_certainty(text: str) -> bool:
+    return (
+        (has_any(text, LEGAL_EFFECT_TERMS) or has_any(text, LEGAL_SAFETY_TERMS))
+        and has_any(text, CERTAINTY_TERMS)
+        and not has_negated_expression(text)
+    )
+
+
+def has_negated_expression(text: str) -> bool:
+    return has_any(text, NEGATED_TERMS)
+
+
+def has_meta_explanation(text: str) -> bool:
+    return has_any(text, META_TERMS)
+
+
+def has_mixed_context(text: str) -> bool:
+    return has_any(text, MIXED_TERMS)
+
+
+def has_uncertainty_disclosure(text: str) -> bool:
+    return has_negated_expression(text) or has_any(text, ["어렵습니다", "달라질 수 있습니다", "��ƽ��ϴ�", "�޶��� �� �ֽ��ϴ�"])
+
+
+def has_legal_conclusion_uncertainty(text: str) -> bool:
+    return has_any(text, ["실제 법률 결론", "���� ���� ���"])
+
+
+def has_direct_legal_action(text: str) -> bool:
+    return has_any(text, DIRECT_ACTION_TERMS)
+
+
+def has_expert_review_dismissal(text: str) -> bool:
+    return has_any(text, EXPERT_DISMISSAL_TERMS)
+
+
+def has_expert_review_recommendation(text: str) -> bool:
+    return has_any(text, EXPERT_RECOMMENDATION_TERMS)
+
+
+def category_to_rule(category: str) -> str:
+    return category.upper()
 
 
 def _result(classification: str, categories: list[str], action: str, matched_rules: list[str], reason_code: str) -> dict[str, Any]:

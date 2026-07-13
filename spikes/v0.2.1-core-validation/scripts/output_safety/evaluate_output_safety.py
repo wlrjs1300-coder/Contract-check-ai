@@ -179,7 +179,7 @@ def validate_expected(expected: dict[str, Any]) -> list[str]:
     return errors
 
 
-def run_checker(fixture_path: Path) -> tuple[dict[str, Any], str]:
+def run_checker_once(fixture_path: Path) -> tuple[int, dict[str, Any], str]:
     completed = subprocess.run(
         [sys.executable, str(CHECKER_PATH), "--input", str(fixture_path)],
         cwd=str(REPO_ROOT),
@@ -196,7 +196,18 @@ def run_checker(fixture_path: Path) -> tuple[dict[str, Any], str]:
         raise ValueError(f"checker stdout invalid JSON for {fixture_path.name}: {exc.msg}") from exc
     if not isinstance(output, dict):
         raise ValueError(f"checker stdout root must be object for {fixture_path.name}")
-    return output, completed.stdout
+    return completed.returncode, output, completed.stdout
+
+
+def run_checker(fixture_path: Path) -> tuple[dict[str, Any], str, bool]:
+    first_exit, first_output, first_stdout = run_checker_once(fixture_path)
+    second_exit, second_output, second_stdout = run_checker_once(fixture_path)
+    deterministic_match = (
+        first_exit == second_exit
+        and first_stdout == second_stdout
+        and first_output == second_output
+    )
+    return first_output, first_stdout, deterministic_match
 
 
 def compare_case(case: dict[str, Any]) -> dict[str, Any]:
@@ -204,7 +215,7 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
     fixture = read_json(fixture_path)
     expected_paths = [item["field_path"] for item in case["field_expectations"]]
     expected_by_path = {item["field_path"]: item for item in case["field_expectations"]}
-    actual, raw_stdout = run_checker(fixture_path)
+    actual, raw_stdout, deterministic_match = run_checker(fixture_path)
     actual_results = actual.get("field_results")
     if not isinstance(actual_results, list):
         raise ValueError(f"{case['test_case_id']}: field_results must be an array")
@@ -261,6 +272,7 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
             or manual_mismatch
             or count_mismatches
             or raw_text_exposure
+            or not deterministic_match
         ),
         "field_count": actual.get("evaluated_field_count", 0),
         "allow": actual.get("allowed_count", 0),
@@ -276,6 +288,7 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
         "manual_mismatch": manual_mismatch,
         "count_mismatches": count_mismatches,
         "raw_text_exposure": raw_text_exposure,
+        "deterministic_mismatch": 0 if deterministic_match else 1,
     }
 
 
@@ -298,6 +311,7 @@ def summarize(case_results: list[dict[str, Any]]) -> dict[str, Any]:
         "manual_mismatches": sum(1 for item in case_results if item["manual_mismatch"]),
         "count_mismatches": sum(len(item["count_mismatches"]) for item in case_results),
         "raw_text_exposure": sum(item["raw_text_exposure"] for item in case_results),
+        "deterministic_mismatches": sum(item["deterministic_mismatch"] for item in case_results),
         "case_results": case_results,
     }
 
@@ -316,7 +330,10 @@ def print_summary(summary: dict[str, Any]) -> None:
     print(f"category_mismatches: {summary['category_mismatches']}")
     print(f"action_mismatches: {summary['action_mismatches']}")
     print(f"overall_mismatches: {summary['overall_mismatches']}")
+    print(f"manual_mismatches: {summary['manual_mismatches']}")
+    print(f"count_mismatches: {summary['count_mismatches']}")
     print(f"raw_text_exposure: {summary['raw_text_exposure']}")
+    print(f"deterministic_mismatches: {summary['deterministic_mismatches']}")
     for case in summary["case_results"]:
         print(f"{case['test_case_id']}: {'PASS' if case['passed'] else 'FAIL'}")
 
