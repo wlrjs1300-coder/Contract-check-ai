@@ -6,9 +6,9 @@ This directory contains the shared foundation for ContractCheck AI v0.2.1 core v
 
 v0.2.1 is not product feature implementation. It is a technical uncertainty reduction phase for later design decisions around clause splitting, personal data detection and masking, output safety, and AI provider policy review.
 
-PR-1 created the foundation structure. PR-2 adds a local clause splitting experiment for synthetic TXT and simple JSON input only.
+PR-1 created the foundation structure. PR-2 adds a local clause splitting experiment for synthetic TXT and simple JSON input only. PR-3 adds a local deterministic personal data detection and masking experiment for frozen synthetic TXT fixtures.
 
-This spike does not implement personal data detection, masking, output filtering, provider adapters, PDF extraction, or external AI calls.
+This spike does not implement output filtering, provider adapters, PDF extraction, or external AI calls.
 
 ## Scope
 
@@ -19,7 +19,9 @@ This foundation includes:
 - shared result schema
 - minimal synthetic data generator
 - clause splitting experiment scripts
+- personal data detection and masking experiment scripts
 - small non-sensitive fixture files
+- local spike reports
 - Git ignore rules for generated data, raw outputs, and summary outputs
 - v0.2.1 progress checklist
 
@@ -28,8 +30,8 @@ This foundation includes:
 | PR | Scope | Status |
 |---|---|---|
 | PR-1 | Experiment foundation structure | Completed |
-| PR-2 | Clause splitting validation | Current PR |
-| PR-3 | Personal data detection and masking | Future PR |
+| PR-2 | Clause splitting validation | Completed |
+| PR-3 | Personal data detection and masking | Completed locally |
 | PR-4 | Masked contract analysis usefulness | Future PR |
 | PR-5 | Output safety validation | Future PR |
 | PR-6 | AI provider policy review and final decision | Future PR |
@@ -146,6 +148,53 @@ Optional actual and summary outputs may be written under `outputs/summary/`, whi
 The splitter is limited to UTF-8 TXT and simple JSON input. It does not read PDFs, call external AI, install packages, or process real contracts.
 
 The experiment preserves all non-whitespace source text in clauses, non-clause sections, or unclassified sections. This lossless source coverage is an experiment invariant for PR-2.
+
+## PII Detection and Masking Experiment
+
+PR-3 uses frozen expected data written before implementation:
+
+```text
+spikes/v0.2.1-core-validation/data/fixtures/pii-masking-expected.sample.json
+```
+
+Run the PR-3 evaluator:
+
+```bash
+python spikes/v0.2.1-core-validation/scripts/pii_masking/evaluate_pii_masking.py
+```
+
+The current local validation result is:
+
+```text
+PII masking evaluation: PASS
+test_cases: 4/4
+entities: 26/26
+exclusions: 15/15
+residual_entities: 0
+```
+
+The evaluator also verifies exclusion overlap and exclusion self-overlap. The current frozen fixture set has exclusion self-overlap count 0.
+
+PR-3 covers these deterministic synthetic taxonomy entries:
+
+- `person` -> `[PERSON_n]`
+- `phone` -> `[PHONE_n]`
+- `email` -> `[EMAIL_n]`
+- `address` -> `[ADDRESS_n]`
+- `date_of_birth` -> `[BIRTH_n]`
+- `national_id_number` -> `[RRN_n]`
+- `business_registration_number` -> `[BIZ_NO_n]`
+- `account_number` -> `[ACCOUNT_n]`
+
+The PR-3 report is stored at:
+
+```text
+spikes/v0.2.1-core-validation/reports/pr-3-pii-masking.md
+```
+
+This experiment uses synthetic fixtures only. It does not approve real personal data handling, real contract processing, external AI transfer, or production service release.
+
+If `detect_and_mask.py --output` is used, it writes masked JSON only when the user explicitly provides the option. Real data storage and retention rules remain a separate design concern.
 
 ## Follow-up
 

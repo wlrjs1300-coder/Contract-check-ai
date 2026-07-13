@@ -56,6 +56,25 @@ MVP 단계의 주요 마스킹 대상은 다음과 같다.
 | 계좌번호 | 000-0000-0000 | [ACCOUNT_1] |
 | 사업자등록번호 | 000-00-00000 | [BIZ_NO_1] |
 
+v0.2.1 PR-3 synthetic PII masking spike uses the following deterministic taxonomy and token prefixes:
+
+| entity_type | token |
+|---|---|
+| `person` | `[PERSON_n]` |
+| `phone` | `[PHONE_n]` |
+| `email` | `[EMAIL_n]` |
+| `address` | `[ADDRESS_n]` |
+| `date_of_birth` | `[BIRTH_n]` |
+| `national_id_number` | `[RRN_n]` |
+| `business_registration_number` | `[BIZ_NO_n]` |
+| `account_number` | `[ACCOUNT_n]` |
+
+PR-3 is limited to local synthetic fixture validation. It does not approve real personal data handling, real contract processing, external AI transfer, or production service release.
+
+Detected raw personal data values must not be stored in result fields, logs, reports, terminal output, PR text, or screenshots. Result objects must not include `text`, `raw_text`, `value`, `source_value`, or `matched_text` fields for detected entities.
+
+Masked output files, including optional `--output` results from local spike scripts, still require separate storage, retention, deletion, and access-control design before any real data use.
+
 ## 5. 로그 보안 규칙
 
 다음 코드는 사용하지 않는다.
