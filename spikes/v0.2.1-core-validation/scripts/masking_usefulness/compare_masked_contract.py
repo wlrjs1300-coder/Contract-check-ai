@@ -56,6 +56,10 @@ def normalize_for_policy(text: str, allow_linebreak_shift: bool = True) -> str:
     return re.sub(r"[ \f\v]+", " ", normalized).strip()
 
 
+def _segments_match(left: str, right: str) -> bool:
+    return normalize_for_policy(left) == normalize_for_policy(right)
+
+
 def _clause_text(clause: dict[str, Any]) -> str:
     parts = [
         clause.get("marker") or "",
@@ -74,6 +78,15 @@ def _matching_clause(split_result: dict[str, Any], marker: str) -> dict[str, Any
         if clause.get("marker") == marker:
             return clause
     return None
+
+
+def _clauses_containing_any(split_result: dict[str, Any], patterns: list[str]) -> set[int]:
+    matches: set[int] = set()
+    for clause in split_result.get("clauses", []):
+        clause_text = _clause_text(clause)
+        if any(pattern in clause_text for pattern in patterns):
+            matches.add(int(clause["ordinal"]))
+    return matches
 
 
 def _patterns_present(
@@ -146,6 +159,7 @@ def _evaluate_required_contexts(
 def _evaluate_party_roles(
     expectations: list[dict[str, Any]],
     masked_text: str,
+    masked_split: dict[str, Any],
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for expectation in expectations:
@@ -161,18 +175,112 @@ def _evaluate_party_roles(
             masked_text,
             expectation.get("verification_mode", "normalized_presence"),
         )
-        passed = indicator_present and token_present
+        indicator_clauses = _clauses_containing_any(masked_split, indicators)
+        token_clauses = _clauses_containing_any(masked_split, token_patterns)
+
+        fallback_used = False
+        if token_patterns:
+            linked = bool(indicator_clauses.intersection(token_clauses))
+            if linked:
+                context_link_status = "linked"
+            elif indicator_present and token_present:
+                context_link_status = "fallback_document"
+                fallback_used = True
+            else:
+                context_link_status = "missing"
+        else:
+            linked = indicator_present
+            context_link_status = "indicator_only" if indicator_present else "missing"
+
+        passed = indicator_present and token_present and (linked or fallback_used)
         results.append(
             {
                 "role": expectation["role"],
                 "expected_token_type": expectation.get("expected_token_type"),
                 "automatic_status": "PASS" if passed else "FAIL",
+                "context_link_status": context_link_status,
+                "fallback_used": fallback_used,
                 "missing_role_indicators_count": missing_indicators,
                 "missing_token_patterns_count": missing_tokens,
                 "manual_review_required": True,
             }
         )
     return results
+
+
+def _independent_non_pii_preservation(
+    source_text: str,
+    masked_text: str,
+    entities: list[dict[str, Any]],
+) -> dict[str, Any]:
+    sorted_entities = sorted(entities, key=lambda item: (item["start_offset"], item["end_offset"]))
+    invalid_span_count = 0
+    overlap_count = 0
+    missing_token_count = 0
+    non_pii_segment_mismatch_count = 0
+    source_cursor = 0
+    masked_cursor = 0
+    previous_end = 0
+
+    for entity in sorted_entities:
+        start = entity.get("start_offset")
+        end = entity.get("end_offset")
+        token = entity.get("mask_token")
+        if not isinstance(start, int) or not isinstance(end, int) or not isinstance(token, str):
+            invalid_span_count += 1
+            continue
+        if not (0 <= start < end <= len(source_text)):
+            invalid_span_count += 1
+            continue
+        if start < previous_end:
+            overlap_count += 1
+            continue
+
+        source_segment = source_text[source_cursor:start]
+        expected_token_index = masked_cursor + len(source_segment)
+        if masked_text.startswith(token, expected_token_index):
+            token_index = expected_token_index
+        else:
+            token_index = -1
+            search_from = masked_cursor
+            while True:
+                candidate = masked_text.find(token, search_from)
+                if candidate < 0:
+                    break
+                if _segments_match(source_segment, masked_text[masked_cursor:candidate]):
+                    token_index = candidate
+                    break
+                search_from = candidate + len(token)
+        if token_index < 0:
+            missing_token_count += 1
+            break
+
+        masked_segment = masked_text[masked_cursor:token_index]
+        if not _segments_match(source_segment, masked_segment):
+            non_pii_segment_mismatch_count += 1
+
+        source_cursor = end
+        masked_cursor = token_index + len(token)
+        previous_end = end
+
+    suffix_preserved = _segments_match(source_text[source_cursor:], masked_text[masked_cursor:])
+    normalized_comparison_passed = (
+        invalid_span_count == 0
+        and overlap_count == 0
+        and missing_token_count == 0
+        and non_pii_segment_mismatch_count == 0
+        and suffix_preserved
+    )
+    return {
+        "passed": normalized_comparison_passed,
+        "entity_count": len(entities),
+        "invalid_span_count": invalid_span_count,
+        "overlap_count": overlap_count,
+        "missing_token_count": missing_token_count,
+        "non_pii_segment_mismatch_count": non_pii_segment_mismatch_count,
+        "suffix_preserved": suffix_preserved,
+        "normalized_comparison_passed": normalized_comparison_passed,
+    }
 
 
 def _repeated_token_consistency(entities: list[dict[str, Any]]) -> dict[str, Any]:
@@ -210,12 +318,17 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
     source_markers = _expected_clause_markers(source_split)
 
     expected_count = case["clause_expectation"]["expected_count"]
+    source_clause_count = len(source_split.get("clauses", []))
     masked_clause_count = len(masked_split.get("clauses", []))
-    no_clause_warning = "no_clause_marker_detected" in masked_split.get("document_warnings", [])
+    source_no_clause_warning = "no_clause_marker_detected" in source_split.get("document_warnings", [])
+    masked_no_clause_warning = "no_clause_marker_detected" in masked_split.get("document_warnings", [])
     no_clause_expected = bool(case["clause_expectation"]["no_clause_marker_expected"])
 
-    expected_masked_text = DETECTOR.mask_text(normalized_source, masked_result["entities"])
-    non_pii_preserved = normalize_for_policy(expected_masked_text) == normalize_for_policy(masked_text)
+    non_pii_result = _independent_non_pii_preservation(
+        normalized_source,
+        masked_text,
+        masked_result["entities"],
+    )
 
     contract_applicable = case.get("contract_type_check", {}).get("applicable", True)
     if contract_applicable is False or case["expected"].get("contract_type_preserved") is None:
@@ -235,13 +348,28 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
         masked_text,
         masked_split,
     )
-    party_role_results = _evaluate_party_roles(case.get("party_role_expectations", []), masked_text)
+    party_role_results = _evaluate_party_roles(
+        case.get("party_role_expectations", []),
+        masked_text,
+        masked_split,
+    )
     repeated = _repeated_token_consistency(masked_result["entities"])
     residual_count = len(DETECTOR.detect_entities(masked_text))
 
-    clause_count_preserved = masked_clause_count == expected_count
+    clause_count_preserved = source_clause_count == expected_count == masked_clause_count
     if no_clause_expected:
-        clause_count_preserved = clause_count_preserved and no_clause_warning
+        clause_count_preserved = (
+            clause_count_preserved
+            and source_clause_count == 0
+            and masked_clause_count == 0
+            and source_no_clause_warning
+            and masked_no_clause_warning
+        )
+    clause_order_preserved = (
+        source_markers == expected_markers
+        and actual_markers == expected_markers
+        and source_markers == actual_markers
+    )
 
     return {
         "test_case_id": case["test_case_id"],
@@ -251,11 +379,13 @@ def compare_case(case: dict[str, Any]) -> dict[str, Any]:
         "clause_count_preserved": clause_count_preserved,
         "expected_clause_count": expected_count,
         "actual_clause_count": masked_clause_count,
-        "source_clause_count": len(source_split.get("clauses", [])),
-        "no_clause_marker_detected": no_clause_warning,
-        "clause_order_preserved": actual_markers == expected_markers,
-        "clause_identity_preserved": actual_markers == expected_markers and source_markers == expected_markers,
-        "non_pii_text_preserved": non_pii_preserved,
+        "source_clause_count": source_clause_count,
+        "source_no_clause_marker_detected": source_no_clause_warning,
+        "masked_no_clause_marker_detected": masked_no_clause_warning,
+        "clause_order_preserved": clause_order_preserved,
+        "clause_identity_preserved": clause_order_preserved,
+        "non_pii_text_preserved": non_pii_result["passed"],
+        "non_pii_comparison": non_pii_result,
         "contract_type_preserved": contract_type_preserved,
         "contract_type_status": contract_type_status,
         "missing_contract_patterns_count": missing_contract_patterns,

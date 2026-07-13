@@ -18,6 +18,8 @@ from compare_masked_contract import SPIKE_ROOT, compare_case
 
 EXPECTED_PATH = SPIKE_ROOT / "data" / "fixtures" / "masking-usefulness-expected.sample.json"
 FORBIDDEN_EXPECTED_FIELDS = {"text", "raw_text", "value", "source_value", "matched_text"}
+FORBIDDEN_MANUAL_REVIEW_FIELDS = FORBIDDEN_EXPECTED_FIELDS | {"source_text", "masked_text", "raw_pii"}
+MANUAL_REVIEW_BASIS = "source-masked-frozen-criteria-only"
 SUPPORTED_CONTEXT_MODES = {
     "exact_presence",
     "normalized_presence",
@@ -37,7 +39,7 @@ def read_json(path: Path) -> dict[str, Any]:
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ValueError(f"{path.name}: UTF-8 BOM is not allowed")
     try:
-        data = json.loads(raw.decode("utf-8"))
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path.name}: invalid JSON: {exc.msg}") from exc
     if not isinstance(data, dict):
@@ -45,16 +47,25 @@ def read_json(path: Path) -> dict[str, Any]:
     return data
 
 
-def _walk_for_forbidden_fields(value: Any, path: str = "$") -> list[str]:
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _walk_for_forbidden_fields(value: Any, forbidden: set[str], path: str = "$") -> list[str]:
     findings: list[str] = []
     if isinstance(value, dict):
         for key, child in value.items():
-            if key in FORBIDDEN_EXPECTED_FIELDS:
+            if key in forbidden:
                 findings.append(f"{path}.{key}")
-            findings.extend(_walk_for_forbidden_fields(child, f"{path}.{key}"))
+            findings.extend(_walk_for_forbidden_fields(child, forbidden, f"{path}.{key}"))
     elif isinstance(value, list):
         for index, child in enumerate(value):
-            findings.extend(_walk_for_forbidden_fields(child, f"{path}[{index}]"))
+            findings.extend(_walk_for_forbidden_fields(child, forbidden, f"{path}[{index}]"))
     return findings
 
 
@@ -117,10 +128,61 @@ def validate_expected(expected: dict[str, Any]) -> list[str]:
             if context.get("verification_mode") not in SUPPORTED_CONTEXT_MODES:
                 errors.append(f"{case_id}: context {context.get('context_id')} unsupported verification mode")
 
-    forbidden = _walk_for_forbidden_fields(expected)
+    forbidden = _walk_for_forbidden_fields(expected, FORBIDDEN_EXPECTED_FIELDS)
     if forbidden:
         errors.append(f"forbidden raw-value fields present: {', '.join(forbidden)}")
     return errors
+
+
+def validate_manual_review(
+    manual_review: dict[str, Any],
+    expected_case_ids: set[str],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    errors: list[str] = []
+    if manual_review.get("schema_version") != "0.1":
+        errors.append("manual_review.schema_version must be 0.1")
+    if manual_review.get("review_status") != "completed":
+        errors.append("manual_review.review_status must be completed")
+    cases = manual_review.get("test_cases")
+    if not isinstance(cases, list):
+        errors.append("manual_review.test_cases must be an array")
+        return {}, errors
+
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in cases:
+        if not isinstance(item, dict):
+            errors.append("manual_review.test_cases item must be an object")
+            continue
+        case_id = item.get("test_case_id")
+        if not isinstance(case_id, str):
+            errors.append("manual_review item missing test_case_id")
+            continue
+        if case_id in by_id:
+            errors.append(f"{case_id}: duplicate manual review test_case_id")
+        by_id[case_id] = item
+
+        for boolean_field in ("party_roles_preserved", "required_context_preserved"):
+            if type(item.get(boolean_field)) is not bool:
+                errors.append(f"{case_id}: {boolean_field} must be boolean")
+        for count_field in ("major_meaning_loss_count", "token_induced_ambiguity_count"):
+            value = item.get(count_field)
+            if type(value) is not int or value < 0:
+                errors.append(f"{case_id}: {count_field} must be a non-negative integer")
+        if item.get("reviewer_basis") != MANUAL_REVIEW_BASIS:
+            errors.append(f"{case_id}: reviewer_basis mismatch")
+
+    actual_case_ids = set(by_id)
+    missing = sorted(expected_case_ids - actual_case_ids)
+    extra = sorted(actual_case_ids - expected_case_ids)
+    if missing:
+        errors.append(f"manual_review missing cases: {', '.join(missing)}")
+    if extra:
+        errors.append(f"manual_review has unexpected cases: {', '.join(extra)}")
+
+    forbidden = _walk_for_forbidden_fields(manual_review, FORBIDDEN_MANUAL_REVIEW_FIELDS)
+    if forbidden:
+        errors.append(f"manual_review forbidden raw-value fields present: {', '.join(forbidden)}")
+    return by_id, errors
 
 
 def _automatic_checks(case: dict[str, Any], comparison: dict[str, Any]) -> list[dict[str, Any]]:
@@ -179,7 +241,7 @@ def _automatic_checks(case: dict[str, Any], comparison: dict[str, Any]) -> list[
     return checks
 
 
-def evaluate_case(case: dict[str, Any]) -> dict[str, Any]:
+def evaluate_case(case: dict[str, Any], manual_review: dict[str, Any] | None = None) -> dict[str, Any]:
     comparison = compare_case(case)
     checks = _automatic_checks(case, comparison)
     failed_checks = [item["name"] for item in checks if not item["passed"]]
@@ -203,8 +265,33 @@ def evaluate_case(case: dict[str, Any]) -> dict[str, Any]:
         if "party_roles_preserved" not in pending_manual_fields:
             pending_manual_fields.append("party_roles_preserved")
 
+    manual_failures: list[str] = []
+    manual_review_status = "PENDING"
+    if manual_review is not None:
+        manual_review_status = "PASS"
+        if manual_review["party_roles_preserved"] is not True:
+            manual_failures.append("party_roles_preserved")
+        if manual_review["required_context_preserved"] is not True:
+            manual_failures.append("required_context_preserved")
+        if manual_review["major_meaning_loss_count"] > 0:
+            manual_failures.append("major_meaning_loss_count")
+        if manual_review["token_induced_ambiguity_count"] > 0:
+            manual_failures.append("token_induced_ambiguity_count")
+        if manual_failures:
+            manual_review_status = "FAIL"
+        pending_manual_fields = []
+    manual_review_counts = None
+    if manual_review is not None:
+        manual_review_counts = {
+            "major_meaning_loss_count": manual_review["major_meaning_loss_count"],
+            "token_induced_ambiguity_count": manual_review["token_induced_ambiguity_count"],
+        }
+
     if failed_checks:
         automatic_status = "FAIL"
+        overall_status = "FAIL"
+    elif manual_failures:
+        automatic_status = "PASS"
         overall_status = "FAIL"
     else:
         automatic_status = "PASS"
@@ -213,9 +300,11 @@ def evaluate_case(case: dict[str, Any]) -> dict[str, Any]:
     return {
         "test_case_id": case["test_case_id"],
         "automatic_status": automatic_status,
-        "manual_review_status": "PENDING" if pending_manual_fields else "NOT_REQUIRED",
+        "manual_review_status": manual_review_status if manual_review is not None else "PENDING",
         "overall_status": overall_status,
         "failed_checks": failed_checks,
+        "manual_review_failures": manual_failures,
+        "manual_review_counts": manual_review_counts,
         "pending_manual_fields": sorted(set(pending_manual_fields)),
         "automatic_checks": checks,
         "contract_type_status": comparison["contract_type_status"],
@@ -231,6 +320,16 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     pending_cases = [result for result in results if result["overall_status"] == "PENDING_REVIEW"]
     failed_cases = [result for result in results if result["overall_status"] == "FAIL"]
     overall = "FAIL" if failed_cases else "PENDING_REVIEW" if pending_cases else "PASS"
+    manual_counts_available = all(result["manual_review_counts"] is not None for result in results)
+    major_meaning_loss_count = None
+    token_induced_ambiguity_count = None
+    if manual_counts_available:
+        major_meaning_loss_count = sum(
+            result["manual_review_counts"]["major_meaning_loss_count"] for result in results
+        )
+        token_induced_ambiguity_count = sum(
+            result["manual_review_counts"]["token_induced_ambiguity_count"] for result in results
+        )
     return {
         "overall_status": overall,
         "test_case_count": len(results),
@@ -238,6 +337,9 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "automatic_checks_total": len(automatic_checks),
         "automatic_failures": len(automatic_failed),
         "manual_review_pending_cases": len(pending_cases),
+        "manual_review_failed_cases": sum(1 for result in results if result["manual_review_status"] == "FAIL"),
+        "major_meaning_loss_count": major_meaning_loss_count,
+        "token_induced_ambiguity_count": token_induced_ambiguity_count,
         "residual_detector_matches": sum(result["residual_detector_matches"] for result in results),
         "results": results,
     }
@@ -246,12 +348,15 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 def print_summary(summary: dict[str, Any]) -> None:
     print(f"PR-4 masking usefulness evaluation: {summary['overall_status']}")
     print(f"test_cases: {summary['test_case_count']}")
-    print(f"automatic_checks: {summary['automatic_checks_passed']}/{summary['automatic_checks_total']}")
-    print(f"automatic_failures: {summary['automatic_failures']}")
-    print(f"manual_review_pending_cases: {summary['manual_review_pending_cases']}")
-    print(f"residual_detector_matches: {summary['residual_detector_matches']}")
-    print("major_meaning_loss: PENDING")
-    print("token_induced_ambiguity: PENDING")
+    print(f"automatic checks: {summary['automatic_checks_passed']}/{summary['automatic_checks_total']}")
+    print(f"automatic failures: {summary['automatic_failures']}")
+    print(f"manual review pending cases: {summary['manual_review_pending_cases']}")
+    print(f"manual review failed cases: {summary['manual_review_failed_cases']}")
+    print(f"residual detector matches: {summary['residual_detector_matches']}")
+    major = summary["major_meaning_loss_count"]
+    ambiguity = summary["token_induced_ambiguity_count"]
+    print(f"major_meaning_loss_count: {major if major is not None else 'PENDING'}")
+    print(f"token_induced_ambiguity_count: {ambiguity if ambiguity is not None else 'PENDING'}")
     print()
     for result in summary["results"]:
         failed = ", ".join(result["failed_checks"]) if result["failed_checks"] else "none"
@@ -262,12 +367,15 @@ def print_summary(summary: dict[str, Any]) -> None:
         print(f"  overall_status: {result['overall_status']}")
         print(f"  contract_type_status: {result['contract_type_status']}")
         print(f"  failed_checks: {failed}")
+        manual_failed = ", ".join(result["manual_review_failures"]) if result["manual_review_failures"] else "none"
+        print(f"  manual_review_failures: {manual_failed}")
         print(f"  pending_checks: {pending}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate PR-4 masking usefulness expectations.")
     parser.add_argument("--expected", default=str(EXPECTED_PATH), help="Frozen masking usefulness expected JSON")
+    parser.add_argument("--manual-review", help="Optional completed manual review JSON path")
     parser.add_argument("--output", help="Optional sanitized summary JSON output path")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print optional JSON output")
     return parser.parse_args(argv)
@@ -281,7 +389,17 @@ def main(argv: list[str] | None = None) -> int:
         errors = validate_expected(expected)
         if errors:
             raise ValueError("; ".join(errors))
-        results = [evaluate_case(case) for case in expected["test_cases"]]
+        manual_reviews: dict[str, dict[str, Any]] = {}
+        if args.manual_review:
+            manual_data = read_json(Path(args.manual_review))
+            expected_case_ids = {case["test_case_id"] for case in expected["test_cases"]}
+            manual_reviews, manual_errors = validate_manual_review(manual_data, expected_case_ids)
+            if manual_errors:
+                raise ValueError("; ".join(manual_errors))
+        results = [
+            evaluate_case(case, manual_reviews.get(case["test_case_id"]) if manual_reviews else None)
+            for case in expected["test_cases"]
+        ]
         summary = summarize(results)
         print_summary(summary)
         if args.output:
