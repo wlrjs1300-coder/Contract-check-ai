@@ -155,10 +155,13 @@ def _evaluate_case(case: dict[str, Any]) -> dict[str, Any]:
     exclusion_intervals = _intervals(expected_exclusions)
     entity_overlap = _overlap_count(entity_intervals, entity_intervals)
     exclusion_overlap = _overlap_count(entity_intervals, exclusion_intervals)
+    exclusion_self_overlap = _overlap_count(exclusion_intervals, exclusion_intervals)
     if entity_overlap:
         failures.append("entity_overlap")
     if exclusion_overlap:
         failures.append("exclusion_overlap")
+    if exclusion_self_overlap:
+        failures.append("exclusion_self_overlap")
 
     replaced_expected_spans = all(
         expected["expected_mask_token"] in actual["masked_text"] for expected in expected_entities
@@ -179,6 +182,7 @@ def _evaluate_case(case: dict[str, Any]) -> dict[str, Any]:
         "entity_count": len(actual_entities),
         "expected_entity_count": len(expected_entities),
         "exclusion_overlap_count": exclusion_overlap,
+        "exclusion_self_overlap_count": exclusion_self_overlap,
         "masked_sha": "PASS"
         if actual["masked_text_sha256"] == case["expected_masked_text_sha256"]
         else "FAIL",
@@ -211,6 +215,7 @@ def main() -> int:
         print(f"  source_sha: {item['source_sha']}")
         print(f"  entity_count: {item['entity_count']}/{item['expected_entity_count']}")
         print(f"  exclusion_overlap_count: {item['exclusion_overlap_count']}")
+        print(f"  exclusion_self_overlap_count: {item['exclusion_self_overlap_count']}")
         print(f"  masked_sha: {item['masked_sha']}")
         print(f"  residual_detection_count: {item['residual_detection_count']}")
         if item["failures"]:
