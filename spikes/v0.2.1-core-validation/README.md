@@ -6,7 +6,7 @@ This directory contains the shared foundation for ContractCheck AI v0.2.1 core v
 
 v0.2.1 is not product feature implementation. It is a technical uncertainty reduction phase for later design decisions around clause splitting, personal data detection and masking, output safety, and AI provider policy review.
 
-PR-1 created the foundation structure. PR-2 adds a local clause splitting experiment for synthetic TXT and simple JSON input only. PR-3 adds a local deterministic personal data detection and masking experiment for frozen synthetic TXT fixtures. PR-4 adds masked contract analysis usefulness validation. PR-5 adds local output safety validation for synthetic user-visible analysis output. PR-6 will review AI provider data handling policies and record the final v0.2.1 technical decision.
+PR-1 created the foundation structure. PR-2 adds a local clause splitting experiment for synthetic TXT and simple JSON input only. PR-3 adds a local deterministic personal data detection and masking experiment for frozen synthetic TXT fixtures. PR-4 adds masked contract analysis usefulness validation. PR-5 adds local output safety validation for synthetic user-visible analysis output. PR-6 reviews AI provider data handling policies and records the final v0.2.1 technical decision.
 
 This spike does not implement provider adapters, PDF extraction, or external AI calls.
 
@@ -35,7 +35,7 @@ This foundation includes:
 | PR-3 (#19) | Personal data detection and masking | Completed |
 | PR-4 (#20) | Masked contract analysis usefulness | Completed / PASS |
 | PR-5 (#21) | Output safety validation | Completed / PASS |
-| PR-6 | AI provider policy review and final decision | Planned / Not started |
+| PR-6 | AI provider policy review and final decision | Research draft corrected / Review pending |
 
 PDF extraction comparison and external AI experiments are not included in the six PRs above. They remain separate follow-up candidates if needed.
 
@@ -256,12 +256,26 @@ spikes/v0.2.1-core-validation/reports/pr-5-output-safety-validation-report.md
 
 This experiment validates rule-based output safety behavior for synthetic user-visible analysis output only. It does not approve production use, real contract processing, external AI transfer, or legal safety.
 
-The next planned spike is PR-6 provider policy review and final v0.2.1 technical decision.
+PR-6 provider policy research has been drafted, corrected for independent review findings, and remains pending review before commit, push, and PR.
+
+## AI Provider Policy Review
+
+PR-6 compares OpenAI API, Anthropic API, and Google Gemini API using official policy sources only.
+
+The PR-6 draft report is stored at:
+
+```text
+spikes/v0.2.1-core-validation/reports/pr-6-provider-policy-final-decision.md
+```
+
+The current draft conclusion is that external AI use remains conditional. No provider is selected. Real contract text and real personal data must not be sent to any external AI provider. Only PR-3-masked input may be considered, and only after outbound allowlist checks, residual PII blocking, provider policy/version recording, raw input and raw response storage prohibition, PR-5 output safety validation, cost limits, timeout/retry limits, and safe-failure behavior are designed.
+
+Google Gemini API free or unpaid quota is not suitable for ContractCheck AI contract analysis because the official Gemini API terms and pricing page distinguish unpaid usage from paid usage for product improvement and review, and warn against submitting sensitive, confidential, or personal information to unpaid services. If Google Gemini API is considered later, only paid quota can be evaluated further, and paid quota is not automatically approved.
 
 ## Follow-up
 
 PR-1~PR-5 validation work is complete.
 
-PR-6 will review AI provider data handling policies and record the final v0.2.1 technical decision.
+PR-6 policy research is drafted, corrected, and pending review.
 
 No external AI call, provider adapter implementation, real contract processing, or production approval is included yet.
