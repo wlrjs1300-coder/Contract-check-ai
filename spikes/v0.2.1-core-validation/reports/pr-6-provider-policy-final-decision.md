@@ -1,10 +1,11 @@
 # PR-6 AI provider policy review and final decision
 
-Status: Draft
-Review status: Independent review corrections in progress
+Status: Final
+Review status: Independent review completed
+GitHub status: PR #25 merged
 Provider selection: Not selected
 External AI use approval: Not granted
-v0.2.1 completion: Not completed
+v0.2.1 completion: Completed as technical validation phase
 
 ## 1. Document purpose
 
@@ -17,9 +18,9 @@ The review checks whether an external AI API can be considered for the MVP after
 - PR-4 masking usefulness validation
 - PR-5 output safety validation
 
-This report is a technical decision aid. It is not legal advice, privacy compliance certification, production approval, or provider selection.
+This report is the final technical decision document after independent review and PR #25 merge. It is a technical decision aid. It is not legal advice, privacy compliance certification, operational approval, production approval, or provider selection.
 
-The file path keeps the planned final report location, but the current contents are a draft under review. It is not the final confirmed decision document until independent review and GitHub reflection are complete.
+v0.2.1 is complete as a technical validation phase, but this does not approve external AI use or implementation. Actual provider selection, endpoint and model choice, contractual conditions, retention controls, and operational approval require separate later confirmation.
 
 ## 2. Scope
 
@@ -257,9 +258,13 @@ Required before any implementation that calls an external AI API:
 
 ## 11. PR-6 status
 
-- Official policy research: completed as draft report
+- Official policy research: completed
+- Independent review: completed
+- GitHub reflection: PR #25 merged
 - Provider selection: not selected
 - External AI API call: not performed
 - Real contract or personal data use: not performed
-- Final v0.2.1 completion: review pending
-- Commit, push, PR: not performed in this research step
+- PR-6: completed
+- v0.2.1 technical validation phase: completed
+- Product use approval: not granted
+- Production release approval: not granted
