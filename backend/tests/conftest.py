@@ -42,3 +42,14 @@ def reset_test_database():
     yield
 
     Base.metadata.drop_all(bind=test_engine)
+
+
+
+@pytest.fixture
+def db_session():
+    db: Session = TestingSessionLocal()
+
+    try:
+        yield db
+    finally:
+        db.close()
