@@ -137,6 +137,21 @@ This document is a design draft for review. It does not approve implementation, 
 - 공개 전 별도 검토
 - 내부 보안 세부 정보 포함 금지
 
+### Synthetic / Non-production (D1~D4와 별도 축)
+
+Synthetic/Non-production은 D1~D4 등급의 다섯 번째 단계가 아니라, "실제 데이터 여부"를 나타내는 별도 축이다. 어떤 데이터가 D1~D4 중 무엇을 모사하는지와, 그 데이터가 실제(real)인지 가상(synthetic)인지는 서로 다른 질문이며 함께 표시할 수 있다(예: "D1-shape, Synthetic").
+
+원칙은 다음과 같다.
+
+- Synthetic 데이터는 실제 계약서, 실제 개인정보, 실제 고객 데이터가 아니다.
+- Synthetic 데이터는 지정된 테스트 경로에서만 사용한다. 경로는 `docs/03-security-rules.md` §11에 이미 정의된 범위(`docs/samples/`, `backend/tests/fixtures/`)를 그대로 따르며, 이 문서에서 새 경로를 정의하지 않는다.
+- Synthetic 데이터는 실제 데이터와 동일한 저장소·로그·전송 경로에 혼합하지 않는다.
+- Synthetic 데이터는 외부 전송을 하지 않는다.
+- Synthetic이라는 이유만으로 D4(Public) 또는 공개 가능으로 간주하지 않는다. Synthetic 데이터가 모사하는 대상이 D1~D2급 구조(예: 가상 계약서 원문, 가상 개인정보 패턴)라면, 저장·로그·경로 격리 기준은 모사 대상 등급(D1~D2)에 준하는 안전 기준을 참고한다.
+- Synthetic 상태는 D1~D4 등급을 대체하지 않는다.
+
+이 상태는 v0.2.3에서 신설하는 후보 개념이며, 세부 fixture 카탈로그·명명 규칙·검토 절차는 후속 보안 테스트 설계에서 확정한다.
+
 ## 5. 데이터 분류표
 
 | Data item | Proposed classification | Contains contract content | May contain personal data | Persistence candidate | Logging allowed | External transfer candidate | Required control | Decision status | Follow-up PR |
@@ -157,8 +172,8 @@ This document is a design draft for review. It does not approve implementation, 
 | confidence score | D2 - Sensitive | No | No | Review needed | Aggregate only | No | No user-facing risk score without later approval | REVIEW REQUIRED | PR-5 |
 | expert review recommendation | D2 - Sensitive | Possible | Possible | Review needed | Status only | No | Must not imply legal advice or safety guarantee | DEFERRED | PR-5 |
 | job status | D3 - Internal | No | No | Yes | Yes | No | Status code only | PROPOSED | PR-3 |
-| audit metadata | D3 - Internal | No | No | Yes | Yes | No | No body, no personal data | PROPOSED | PR-3 |
-| operational logs | D3 - Internal | No | No | Yes | Yes | No | No body, no personal data, no raw response | PROPOSED | PR-3 |
+| audit metadata | D3 - Internal | No | No | Yes | Yes | No | No body, no personal data; allowlist fields only (see logging-audit.md); raw payload is a separate D2 item below | PROPOSED | PR-3 |
+| operational logs | D3 - Internal | No | No | Yes | Yes | No | No body, no personal data, no raw response; allowlist fields only (see logging-audit.md); raw payload is a separate D2 item below | PROPOSED | PR-3 |
 | deletion metadata | D3 - Internal | No | No | Yes | Yes | No | Completion/failure metadata only | PROPOSED | PR-3 |
 | policy version | D3 - Internal | No | No | Yes | Yes | Possible | Version string only | PROPOSED | PR-4 |
 | model version | D3 - Internal | No | No | Yes | Yes | Possible | Version string only, no payload | REVIEW REQUIRED | PR-4 |
@@ -167,6 +182,31 @@ This document is a design draft for review. It does not approve implementation, 
 | block reason | D2 - Sensitive | Possible | Possible | Review needed | Code only | No | Avoid body excerpt or personal data | REVIEW REQUIRED | PR-5 |
 | retry count | D3 - Internal | No | No | Yes | Yes | No | Numeric count only | PROPOSED | PR-5 |
 | processing duration | D3 - Internal | No | No | Yes | Yes | No | Timing metadata only | PROPOSED | PR-3 |
+| raw operational/audit log payload | D2 - Sensitive | Possible | Possible | No | No | No | Free-text or body-bearing log/exception content; must not be written to any log; distinct from allowlist-compliant metadata above | PROHIBITED | v0.2.3 |
+| document metadata (excluding original filename) | D3 - Internal | No | No | Yes | Yes | Review needed | document_id, status, timestamps, storage/deletion state only; excludes original filename (see separate item) | PROPOSED | v0.2.3 |
+| original filename | D2 - Sensitive | Possible | Possible | Review needed | No | No | May identify user or contract; do not log; external transfer prohibited | REVIEW REQUIRED | v0.2.3 |
+| external transfer metadata | D3 - Internal | No | No | Yes | Yes | N/A (metadata about a transfer, not payload) | request_id, correlation_id, reference_id, provider/endpoint/model approval status, policy/schema version, event/result/block reason code, retry count, timestamp only; no raw payload or response body | PROPOSED | v0.2.3 |
+| security event log | D3 - Internal | No | No | Yes | Yes | No | Event code, actor/target identifier, block reason code, severity only; no raw payload or detected PII value | PROPOSED | v0.2.3 |
+| email address (account) | D1 - Restricted | No | Yes | Review needed | No | No | Authentication-adjacent personal data; do not log; masking not applicable (account field, not contract content); access-control governed | REVIEW REQUIRED | v0.2.3 |
+| user_id | D3 - Internal (REVIEW REQUIRED) | No | No | Yes | Review needed | Review needed | Directly linkable to a real account, same caution as actor_id in logging-audit.md; not treated as fully non-sensitive | REVIEW REQUIRED | v0.2.3 |
+| password hash | D1 - Restricted | No | No | Review needed | No | No | Authentication credential in derived form; classified by credential sensitivity, not by reversibility; must not be equated with source_hash, which is a non-reversible content-reference hash for non-secret text; plaintext password storage remains prohibited | REVIEW REQUIRED | v0.2.3 |
+| authentication token (access/refresh token, API key) | D1 - Restricted | No | No | No | No | No | Credential; server-side secret store only; must not be logged or exported | PROHIBITED | v0.2.3 |
+| session identifier | D2 - Sensitive (D1 if it functions as a bearer token) | No | No | Review needed | No | No | Default D2 per existing external-transfer-control.md precedent; re-review to D1 required if the identifier itself carries authentication authority (bearer-style) | REVIEW REQUIRED | v0.2.3 |
+| role/permission information | D3 - Internal (REVIEW REQUIRED when combined with user_id) | No | No | Yes | Review needed | Review needed | Role category alone is low sensitivity; combined with a specific user_id it reveals a real account's privilege level | REVIEW REQUIRED | v0.2.3 |
+
+### normalized analysis result의 D3 추출 허용 필드
+
+normalized analysis result 컨테이너 자체는 위 표와 같이 D2 - Sensitive로 고정한다. 다음 필드는 원문, 인용문, 개인정보, 자유 텍스트를 포함하지 않는 경우에 한해 로그·감사 등 최소화 목적으로 D3 필드로 별도 추출할 수 있다. 이 화이트리스트는 컨테이너 자체의 등급을 낮추지 않는다.
+
+- document_id
+- clause_id
+- reference_id
+- model_version
+- provider_version
+- timestamp
+- status
+
+위 목록에 없는 필드(조항 원문, 인용문, risk_reason, evidence, 개인정보 등 자유 텍스트를 포함할 수 있는 필드)는 D3로 추출할 수 없으며 D2 컨테이너 등급을 그대로 따른다.
 
 ## 6. 처리·저장·로그·외부 전송 기준
 
