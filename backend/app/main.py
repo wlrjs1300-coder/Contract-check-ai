@@ -1,5 +1,6 @@
 ﻿from fastapi import FastAPI
 
+from backend.app.api.analysis_jobs import router as analysis_jobs_router
 from backend.app.api.documents import router as documents_router
 
 app = FastAPI(
@@ -8,6 +9,7 @@ app = FastAPI(
 )
 
 app.include_router(documents_router)
+app.include_router(analysis_jobs_router)
 
 
 @app.get("/health")
