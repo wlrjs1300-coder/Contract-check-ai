@@ -88,3 +88,6 @@ scratch/
 .idea/
 .DS_Store
 Thumbs.db
+
+# allow backend dependency file
+!backend/requirements.txt
