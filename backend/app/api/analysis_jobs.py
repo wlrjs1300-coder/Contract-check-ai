@@ -5,11 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
-from backend.app.db.models import (
-    AnalysisJob,
-    AnalysisResultItem,
-    Document,
-)
+from backend.app.db.models import AnalysisJob, Document
+from backend.app.services.analysis_pipeline import run_analysis_pipeline
 
 
 router = APIRouter(tags=["analysis-jobs"])
@@ -36,24 +33,21 @@ def create_analysis_job(
     job = AnalysisJob(
         id=str(uuid4()),
         document_id=document_id,
-        status="completed",
+        status="queued",
     )
-
-    for clause in document.clauses:
-        job.result_items.append(
-            AnalysisResultItem(
-                clause_record_id=clause.id,
-                reference_id=clause.reference_id,
-                display_label="추가 확인",
-                summary="합성 분석 결과입니다.",
-                expert_review_recommended=False,
-                extra_data={},
-            )
-        )
 
     db.add(job)
     db.commit()
     db.refresh(job)
+
+    run_analysis_pipeline(
+        db=db,
+        job=job,
+        clauses=sorted(
+            document.clauses,
+            key=lambda clause: clause.ordinal,
+        ),
+    )
 
     return {
         "job_id": job.id,
