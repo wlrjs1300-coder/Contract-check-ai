@@ -37,7 +37,8 @@ def create_analysis_job(
     )
 
     db.add(job)
-    db.flush()
+    db.commit()
+    db.refresh(job)
 
     run_analysis_pipeline(
         db=db,
