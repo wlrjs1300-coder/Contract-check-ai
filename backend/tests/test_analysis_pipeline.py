@@ -126,3 +126,49 @@ def test_run_analysis_pipeline_marks_job_failed(
 
     assert job.status == "failed"
     assert job.result_items == []
+
+
+
+def test_run_analysis_pipeline_rolls_back_partial_results(
+    db_session: Session,
+) -> None:
+    document, first_clause = _create_document_and_clause(db_session)
+
+    second_clause = Clause(
+        id=str(uuid4()),
+        clause_id="clause-002",
+        reference_id="invalid-reference-id",
+        source_hash="second-source-hash",
+        ordinal=2,
+        marker="2.",
+        clause_type="normal",
+        title=None,
+        body="Second synthetic clause body.",
+        warnings=[],
+        document_id=document.id,
+    )
+    db_session.add(second_clause)
+    db_session.commit()
+    db_session.refresh(second_clause)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with pytest.raises(ValueError):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [first_clause, second_clause],
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []

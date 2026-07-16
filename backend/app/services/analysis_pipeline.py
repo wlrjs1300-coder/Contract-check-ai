@@ -74,6 +74,13 @@ def run_analysis_pipeline(
         db.commit()
         db.refresh(job)
     except Exception:
-        job.status = "failed"
-        db.commit()
+        job_id = job.id
+        db.rollback()
+
+        failed_job = db.get(AnalysisJob, job_id)
+
+        if failed_job is not None:
+            failed_job.status = "failed"
+            db.commit()
+
         raise
