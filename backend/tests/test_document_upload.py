@@ -1,14 +1,9 @@
-﻿from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from backend.app.main import app
-from backend.app.services.document_store import documents
 
 
 client = TestClient(app)
-
-
-def setup_function() -> None:
-    documents.clear()
 
 
 def test_upload_txt_document() -> None:

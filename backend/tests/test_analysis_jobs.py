@@ -1,18 +1,9 @@
-﻿from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient
 
-from backend.app.api.analysis_jobs import analysis_jobs
 from backend.app.main import app
-from backend.app.services.analysis_result_store import analysis_results
-from backend.app.services.document_store import documents
 
 
 client = TestClient(app)
-
-
-def setup_function() -> None:
-    documents.clear()
-    analysis_jobs.clear()
-    analysis_results.clear()
 
 
 def test_create_analysis_job_and_get_results() -> None:
