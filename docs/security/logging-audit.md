@@ -138,6 +138,16 @@ Concrete log retention periods, log collection systems, alert thresholds, roles,
 - raw exception body
 - secret
 
+### L1~L3와 D1~D4 매핑
+
+L1(Operational)/L2(Audit)/L3(Security Event)는 로그의 목적에 따른 분류이며, D1~D4는 개별 데이터 항목의 민감도에 따른 분류이다(`docs/security/data-classification.md` 참고). 두 체계는 서로 다른 축이며, 하나가 다른 하나를 대체하지 않는다.
+
+- **L1 — Operational**: 위 "허용 후보" 목록은 D3(Internal) 등급 필드를 중심으로 구성된다. D2 이상의 payload(raw operational/audit log payload, 계약서 본문, 개인정보, masked clause body 등)가 기록되려는 경우 해당 기록 시도는 금지 또는 차단 대상이다.
+- **L2 — Audit**: 위 "허용 후보" 목록은 D3 등급 필드를 중심으로 구성된다. 원문(D1)과 D2 payload(masked clause body, outbound payload, normalized analysis result 원문 등)는 감사 로그에도 기록하지 않는다.
+- **L3 — Security Event**: 위 "허용 후보" 목록은 D3 등급 필드(event code, actor/target identifier, block reason code, severity, result code)를 중심으로 구성된다. 코드·상태·식별자 중심으로 제한하며, 탐지된 개인정보 원문이나 payload 전체와 같은 D1/D2 원문은 기록하지 않는다.
+
+이 매핑은 §7 허용 필드와 §8 금지 필드의 기존 값을 변경하지 않으며, 두 분류 체계 사이의 대응 관계만 명확히 한다. 구체적인 보존 기간과 운영 정책은 이 매핑으로 확정되지 않는다.
+
 ## 4. 운영 로그
 
 운영 로그는 서비스 상태와 처리 상태를 확인하기 위한 최소 메타데이터 후보이다.

@@ -243,9 +243,10 @@ Authorization principles:
 | Unmasked clause data | D1 | PROHIBITED | PROHIBITED | PROHIBITED | PROHIBITED | REVIEW REQUIRED | Masking and residual checks | PROHIBITED |
 | Detected personal data | D1 | PROHIBITED | PROHIBITED | PROHIBITED | PROHIBITED | REVIEW REQUIRED | No raw source exposure | PROHIBITED |
 | Masked clause text | D2 | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | PROHIBITED | REVIEW REQUIRED | residual 0 and allowlist | REVIEW REQUIRED |
-| Normalized analysis result | D2/D3 | ALLOWED CANDIDATE for owner after safety checks | REVIEW REQUIRED | REVIEW REQUIRED | PROHIBITED | REVIEW REQUIRED | output safety and ownership | ALLOWED CANDIDATE |
+| Normalized analysis result | D2 | ALLOWED CANDIDATE for owner after safety checks | REVIEW REQUIRED | REVIEW REQUIRED | PROHIBITED | REVIEW REQUIRED | output safety and ownership; D3 extraction fields defined in data-classification.md do not lower this container's own class | ALLOWED CANDIDATE |
 | Document metadata | D3 | ALLOWED CANDIDATE for owner | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | ownership and minimization | ALLOWED CANDIDATE |
-| Operational log | D2/D3 | PROHIBITED | PROHIBITED | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | no body or PII | REVIEW REQUIRED |
+| Operational log (raw payload) | D2 | PROHIBITED | PROHIBITED | PROHIBITED | PROHIBITED | REVIEW REQUIRED | free-text or body-bearing log content; see data-classification.md | PROHIBITED |
+| Operational log (allowlist metadata) | D3 | PROHIBITED | PROHIBITED | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | no body or PII; allowlist fields only per logging-audit.md | REVIEW REQUIRED |
 | Audit log | D3 | PROHIBITED | PROHIBITED | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | audit access approval | REVIEW REQUIRED |
 | Security event log | D3 | PROHIBITED | PROHIBITED | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | event-code minimization | REVIEW REQUIRED |
 | Deletion metadata | D3 | ALLOWED CANDIDATE for owner where safe | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | REVIEW REQUIRED | minimal fields only | REVIEW REQUIRED |
