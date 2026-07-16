@@ -7,6 +7,9 @@ from backend.app.db.models import (
     AnalysisResultItem,
     Clause,
 )
+from backend.app.services.analysis_result_schema import (
+    AnalysisResultData,
+)
 
 
 VALID_JOB_STATUSES = {
@@ -43,16 +46,26 @@ def run_analysis_pipeline(
         for clause in clauses:
             validate_reference_id(job.document_id, clause)
 
+            result_data = AnalysisResultData(
+                reference_id=clause.reference_id,
+                display_label="\ucd94\uac00 \ud655\uc778",
+                summary=(
+                    "\ud569\uc131 \ubd84\uc11d "
+                    "\uacb0\uacfc\uc785\ub2c8\ub2e4."
+                ),
+                expert_review_recommended=False,
+            )
+            result_data.validate()
+
             job.result_items.append(
                 AnalysisResultItem(
                     clause_record_id=clause.id,
-                    reference_id=clause.reference_id,
-                    display_label="\ucd94\uac00 \ud655\uc778",
-                    summary=(
-                        "\ud569\uc131 \ubd84\uc11d "
-                        "\uacb0\uacfc\uc785\ub2c8\ub2e4."
+                    reference_id=result_data.reference_id,
+                    display_label=result_data.display_label,
+                    summary=result_data.summary,
+                    expert_review_recommended=(
+                        result_data.expert_review_recommended
                     ),
-                    expert_review_recommended=False,
                     extra_data={},
                 )
             )
