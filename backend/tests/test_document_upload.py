@@ -1,15 +1,9 @@
 from fastapi.testclient import TestClient
 
-from backend.app.db.database import Base, engine
 from backend.app.main import app
 
 
 client = TestClient(app)
-
-
-def setup_function() -> None:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
 
 
 def test_upload_txt_document() -> None:
