@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
+from backend.app.services.analysis_result_store import analysis_results
 from backend.app.services.clause_splitter import split_clauses
 from backend.app.services.document_store import documents
 
@@ -76,3 +77,23 @@ def get_document(document_id: str) -> dict[str, object]:
         )
 
     return document
+
+@router.get("/{document_id}/analysis-results")
+def get_analysis_results(document_id: str) -> dict[str, object]:
+    document = documents.get(document_id)
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    result = analysis_results.get(document_id)
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Analysis result not found.",
+        )
+
+    return result
