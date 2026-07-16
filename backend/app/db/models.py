@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.db.database import Base
@@ -43,8 +52,16 @@ class Document(Base):
 
 class Clause(Base):
     __tablename__ = "clauses"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "clause_id",
+            name="uq_clauses_document_clause",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    clause_id: Mapped[str] = mapped_column(String(50))
     document_id: Mapped[str] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"),
         index=True,
@@ -107,7 +124,7 @@ class AnalysisResultItem(Base):
         ForeignKey("analysis_jobs.id", ondelete="CASCADE"),
         index=True,
     )
-    clause_id: Mapped[str] = mapped_column(
+    clause_record_id: Mapped[str] = mapped_column(
         ForeignKey("clauses.id", ondelete="CASCADE"),
         index=True,
     )
