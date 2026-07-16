@@ -1,0 +1,64 @@
+﻿from fastapi.testclient import TestClient
+
+from backend.app.main import app
+
+
+client = TestClient(app)
+
+
+def test_upload_txt_document() -> None:
+    response = client.post(
+        "/documents/upload",
+        files={
+            "file": (
+                "employment-contract.sample.txt",
+                "제1조 근로조건",
+                "text/plain",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["filename"] == "employment-contract.sample.txt"
+    assert body["content_type"] == "text/plain"
+    assert body["size_bytes"] > 0
+    assert body["character_count"] == len("제1조 근로조건")
+    assert body["status"] == "uploaded"
+
+
+def test_reject_non_txt_document() -> None:
+    response = client.post(
+        "/documents/upload",
+        files={
+            "file": (
+                "contract.pdf",
+                b"%PDF-test",
+                "application/pdf",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Only .txt files are allowed."
+    }
+
+
+def test_reject_empty_txt_document() -> None:
+    response = client.post(
+        "/documents/upload",
+        files={
+            "file": (
+                "empty.sample.txt",
+                b"",
+                "text/plain",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "The uploaded file is empty."
+    }
