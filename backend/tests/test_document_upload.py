@@ -21,11 +21,17 @@ def test_upload_txt_document() -> None:
     assert response.status_code == 200
 
     body = response.json()
+    assert body["document_id"]
     assert body["filename"] == "employment-contract.sample.txt"
     assert body["content_type"] == "text/plain"
     assert body["size_bytes"] > 0
     assert body["character_count"] == len("제1조 근로조건")
-    assert body["status"] == "uploaded"
+    assert body["status"] == "processed"
+    assert body["clause_count"] == 1
+    assert len(body["clauses"]) == 1
+    assert body["clauses"][0]["marker"] == "제1조"
+    assert body["clauses"][0]["body"] == "근로조건"
+    assert body["document_warnings"] == []
 
 
 def test_reject_non_txt_document() -> None:

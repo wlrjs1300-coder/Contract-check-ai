@@ -1,6 +1,9 @@
 ﻿from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+
+from backend.app.services.clause_splitter import split_clauses
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -34,17 +37,25 @@ async def upload_document(file: UploadFile = File(...)) -> dict[str, object]:
         )
 
     try:
-        text = content.decode("utf-8")
+        text = content.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=400,
             detail="The uploaded file must be UTF-8 encoded.",
         ) from exc
 
+    document_id = str(uuid4())
+    clause_result = split_clauses(text, document_id)
+
     return {
+        "document_id": document_id,
         "filename": filename,
         "content_type": file.content_type,
         "size_bytes": len(content),
         "character_count": len(text),
-        "status": "uploaded",
+        "status": "processed",
+        "clause_count": clause_result["clause_count"],
+        "clauses": clause_result["clauses"],
+        "unclassified_sections": clause_result["unclassified_sections"],
+        "document_warnings": clause_result["document_warnings"],
     }
