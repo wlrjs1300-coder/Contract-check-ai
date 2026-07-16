@@ -4,6 +4,7 @@ from uuid import uuid4
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from backend.app.services.clause_splitter import split_clauses
+from backend.app.services.document_store import documents
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -47,7 +48,7 @@ async def upload_document(file: UploadFile = File(...)) -> dict[str, object]:
     document_id = str(uuid4())
     clause_result = split_clauses(text, document_id)
 
-    return {
+    document = {
         "document_id": document_id,
         "filename": filename,
         "content_type": file.content_type,
@@ -59,3 +60,19 @@ async def upload_document(file: UploadFile = File(...)) -> dict[str, object]:
         "unclassified_sections": clause_result["unclassified_sections"],
         "document_warnings": clause_result["document_warnings"],
     }
+
+    documents[document_id] = document
+    return document
+
+
+@router.get("/{document_id}")
+def get_document(document_id: str) -> dict[str, object]:
+    document = documents.get(document_id)
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    return document
