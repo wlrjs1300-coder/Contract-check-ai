@@ -8,6 +8,7 @@ from backend.app.services.analysis_pipeline import (
     run_analysis_pipeline,
     validate_reference_id,
 )
+from backend.app.services.analysis_result_schema import AnalysisResultData
 
 
 def _create_document_and_clause(
@@ -165,6 +166,135 @@ def test_run_analysis_pipeline_rolls_back_partial_results(
             db_session,
             job,
             [first_clause, second_clause],
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
+
+
+class CustomAnalysisProvider:
+    def analyze_clause(
+        self,
+        clause: Clause,
+    ) -> AnalysisResultData:
+        return AnalysisResultData(
+            reference_id=clause.reference_id,
+            display_label="주의",
+            summary="교체된 provider 결과입니다.",
+            expert_review_recommended=True,
+        )
+
+
+class InvalidAnalysisProvider:
+    def analyze_clause(
+        self,
+        clause: Clause,
+    ) -> AnalysisResultData:
+        return AnalysisResultData(
+            reference_id=clause.reference_id,
+            display_label="허용되지 않은 라벨",
+            summary="잘못된 provider 결과입니다.",
+            expert_review_recommended=False,
+        )
+
+
+class FailingAnalysisProvider:
+    def analyze_clause(
+        self,
+        clause: Clause,
+    ) -> AnalysisResultData:
+        raise RuntimeError("Synthetic provider failure.")
+
+
+def test_run_analysis_pipeline_accepts_custom_provider(
+    db_session: Session,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    run_analysis_pipeline(
+        db_session,
+        job,
+        [clause],
+        provider=CustomAnalysisProvider(),
+    )
+
+    assert job.status == "completed"
+    assert len(job.result_items) == 1
+    assert job.result_items[0].display_label == "주의"
+    assert (
+        job.result_items[0].summary
+        == "교체된 provider 결과입니다."
+    )
+    assert job.result_items[0].expert_review_recommended is True
+
+
+def test_run_analysis_pipeline_rejects_invalid_provider_result(
+    db_session: Session,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with pytest.raises(
+        ValueError,
+        match="display_label must be one of the allowed labels",
+    ):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [clause],
+            provider=InvalidAnalysisProvider(),
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
+
+
+def test_run_analysis_pipeline_handles_provider_failure(
+    db_session: Session,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Synthetic provider failure",
+    ):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [clause],
+            provider=FailingAnalysisProvider(),
         )
 
     failed_job = db_session.get(AnalysisJob, job.id)
