@@ -10,6 +10,11 @@ from backend.app.services.analysis_pipeline import (
     validate_reference_id,
 )
 from backend.app.services.analysis_result_schema import AnalysisResultData
+from backend.app.services.provider_execution import (
+    ProviderAuthenticationError,
+    ProviderExecutionPolicy,
+    ProviderTimeoutError,
+)
 
 
 def _create_document_and_clause(
@@ -681,6 +686,230 @@ def test_run_analysis_pipeline_rolls_back_partial_results_on_unsafe_output(
 
     failed_job = db_session.get(AnalysisJob, job.id)
 
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
+
+
+class RetryThenSuccessProvider:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def analyze_clause(
+        self,
+        provider_input: AnalysisProviderInput,
+    ) -> AnalysisResultData:
+        self.call_count += 1
+
+        if self.call_count == 1:
+            raise ProviderTimeoutError()
+
+        return AnalysisResultData(
+            reference_id=provider_input.reference_id,
+            display_label="추가 확인",
+            summary="재시도 후 생성된 합성 분석 결과입니다.",
+            expert_review_recommended=False,
+        )
+
+
+def test_run_analysis_pipeline_retries_provider_then_succeeds(
+    db_session: Session,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    provider = RetryThenSuccessProvider()
+
+    run_analysis_pipeline(
+        db_session,
+        job,
+        [clause],
+        provider=provider,
+        provider_policy=ProviderExecutionPolicy(
+            max_attempts=2,
+        ),
+    )
+
+    assert provider.call_count == 2
+    assert job.status == "completed"
+    assert len(job.result_items) == 1
+
+
+class AlwaysTimeoutProvider:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def analyze_clause(
+        self,
+        provider_input: AnalysisProviderInput,
+    ) -> AnalysisResultData:
+        self.call_count += 1
+        raise ProviderTimeoutError()
+
+
+def test_run_analysis_pipeline_marks_job_failed_after_retry_exhaustion(
+    db_session: Session,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    provider = AlwaysTimeoutProvider()
+
+    with pytest.raises(ProviderTimeoutError) as exc_info:
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [clause],
+            provider=provider,
+            provider_policy=ProviderExecutionPolicy(
+                max_attempts=3,
+            ),
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert provider.call_count == 3
+    assert exc_info.value.reason_code == "PROVIDER_TIMEOUT"
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
+
+
+class ImmediateAuthenticationFailureProvider:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def analyze_clause(
+        self,
+        provider_input: AnalysisProviderInput,
+    ) -> AnalysisResultData:
+        self.call_count += 1
+        raise ProviderAuthenticationError()
+
+
+def test_run_analysis_pipeline_does_not_retry_authentication_failure(
+    db_session: Session,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    provider = ImmediateAuthenticationFailureProvider()
+
+    with pytest.raises(ProviderAuthenticationError):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [clause],
+            provider=provider,
+            provider_policy=ProviderExecutionPolicy(
+                max_attempts=3,
+            ),
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert provider.call_count == 1
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
+
+
+class PartiallyFailingRetryProvider:
+    def __init__(self) -> None:
+        self.call_counts: dict[str, int] = {}
+
+    def analyze_clause(
+        self,
+        provider_input: AnalysisProviderInput,
+    ) -> AnalysisResultData:
+        reference_id = provider_input.reference_id
+        self.call_counts[reference_id] = (
+            self.call_counts.get(reference_id, 0) + 1
+        )
+
+        if reference_id.endswith(":clause:2"):
+            raise ProviderTimeoutError()
+
+        return AnalysisResultData(
+            reference_id=reference_id,
+            display_label="추가 확인",
+            summary="첫 번째 조항의 합성 분석 결과입니다.",
+            expert_review_recommended=False,
+        )
+
+
+def test_run_analysis_pipeline_rolls_back_partial_results_after_retry_failure(
+    db_session: Session,
+) -> None:
+    document, first_clause = _create_document_and_clause(db_session)
+
+    second_clause = Clause(
+        id=str(uuid4()),
+        clause_id="clause-002",
+        reference_id=f"{document.id}:clause:2",
+        source_hash="second-source-hash",
+        ordinal=2,
+        marker="2.",
+        clause_type="normal",
+        title=None,
+        body="Second synthetic clause body.",
+        warnings=[],
+        document_id=document.id,
+    )
+    db_session.add(second_clause)
+    db_session.commit()
+    db_session.refresh(second_clause)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    provider = PartiallyFailingRetryProvider()
+
+    with pytest.raises(ProviderTimeoutError):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [first_clause, second_clause],
+            provider=provider,
+            provider_policy=ProviderExecutionPolicy(
+                max_attempts=2,
+            ),
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert provider.call_counts[first_clause.reference_id] == 1
+    assert provider.call_counts[second_clause.reference_id] == 2
     assert failed_job is not None
     assert failed_job.status == "failed"
     assert failed_job.result_items == []

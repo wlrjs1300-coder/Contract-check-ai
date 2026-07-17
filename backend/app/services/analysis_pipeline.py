@@ -20,6 +20,11 @@ from backend.app.services.pii_masking import (
     detect_and_mask,
     detect_entities,
 )
+from backend.app.services.provider_execution import (
+    DEFAULT_PROVIDER_EXECUTION_POLICY,
+    ProviderExecutionPolicy,
+    execute_provider,
+)
 
 
 VALID_JOB_STATUSES = {
@@ -84,6 +89,9 @@ def run_analysis_pipeline(
     job: AnalysisJob,
     clauses: Sequence[Clause],
     provider: AnalysisProvider = DEFAULT_ANALYSIS_PROVIDER,
+    provider_policy: ProviderExecutionPolicy = (
+        DEFAULT_PROVIDER_EXECUTION_POLICY
+    ),
 ) -> None:
     job.status = "processing"
     db.flush()
@@ -93,7 +101,11 @@ def run_analysis_pipeline(
             validate_reference_id(job.document_id, clause)
 
             provider_input = build_provider_input(clause)
-            result_data = provider.analyze_clause(provider_input)
+            result_data = execute_provider(
+                provider,
+                provider_input,
+                policy=provider_policy,
+            )
             result_data.validate()
             validate_result_reference_id(
                 clause,
