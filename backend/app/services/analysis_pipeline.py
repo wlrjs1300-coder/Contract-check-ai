@@ -7,8 +7,9 @@ from backend.app.db.models import (
     AnalysisResultItem,
     Clause,
 )
-from backend.app.services.analysis_result_schema import (
-    AnalysisResultData,
+from backend.app.services.analysis_provider import (
+    DEFAULT_ANALYSIS_PROVIDER,
+    AnalysisProvider,
 )
 
 
@@ -38,6 +39,7 @@ def run_analysis_pipeline(
     db: Session,
     job: AnalysisJob,
     clauses: Sequence[Clause],
+    provider: AnalysisProvider = DEFAULT_ANALYSIS_PROVIDER,
 ) -> None:
     job.status = "processing"
     db.flush()
@@ -46,15 +48,7 @@ def run_analysis_pipeline(
         for clause in clauses:
             validate_reference_id(job.document_id, clause)
 
-            result_data = AnalysisResultData(
-                reference_id=clause.reference_id,
-                display_label="\ucd94\uac00 \ud655\uc778",
-                summary=(
-                    "\ud569\uc131 \ubd84\uc11d "
-                    "\uacb0\uacfc\uc785\ub2c8\ub2e4."
-                ),
-                expert_review_recommended=False,
-            )
+            result_data = provider.analyze_clause(clause)
             result_data.validate()
 
             job.result_items.append(
