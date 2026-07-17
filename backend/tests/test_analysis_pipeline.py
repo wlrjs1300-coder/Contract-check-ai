@@ -302,3 +302,122 @@ def test_run_analysis_pipeline_handles_provider_failure(
     assert failed_job is not None
     assert failed_job.status == "failed"
     assert failed_job.result_items == []
+
+
+class MismatchedReferenceProvider:
+    def analyze_clause(
+        self,
+        clause: Clause,
+    ) -> AnalysisResultData:
+        return AnalysisResultData(
+            reference_id="different-document:clause:999",
+            display_label="추가 확인",
+            summary="연결 대상이 잘못된 provider 결과입니다.",
+            expert_review_recommended=False,
+        )
+
+
+def test_run_analysis_pipeline_rejects_mismatched_result_reference_id(
+    db_session: Session,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Provider result reference_id does not match "
+            "the current clause"
+        ),
+    ):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [clause],
+            provider=MismatchedReferenceProvider(),
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
+
+
+class PartiallyMismatchedReferenceProvider:
+    def analyze_clause(
+        self,
+        clause: Clause,
+    ) -> AnalysisResultData:
+        reference_id = (
+            clause.reference_id
+            if clause.ordinal == 1
+            else "different-document:clause:999"
+        )
+
+        return AnalysisResultData(
+            reference_id=reference_id,
+            display_label="추가 확인",
+            summary="부분 처리 후 연결 검증 결과입니다.",
+            expert_review_recommended=False,
+        )
+
+
+def test_run_analysis_pipeline_rolls_back_partial_results_on_mismatch(
+    db_session: Session,
+) -> None:
+    document, first_clause = _create_document_and_clause(db_session)
+
+    second_clause = Clause(
+        id=str(uuid4()),
+        clause_id="clause-002",
+        reference_id=f"{document.id}:clause:2",
+        source_hash="second-source-hash",
+        ordinal=2,
+        marker="2.",
+        clause_type="normal",
+        title=None,
+        body="Second synthetic clause body.",
+        warnings=[],
+        document_id=document.id,
+    )
+    db_session.add(second_clause)
+    db_session.commit()
+    db_session.refresh(second_clause)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Provider result reference_id does not match "
+            "the current clause"
+        ),
+    ):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [first_clause, second_clause],
+            provider=PartiallyMismatchedReferenceProvider(),
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
