@@ -12,6 +12,10 @@ from backend.app.services.analysis_provider import (
     AnalysisProvider,
     AnalysisProviderInput,
 )
+from backend.app.services.output_safety import (
+    ALLOW,
+    check_summary_output,
+)
 from backend.app.services.pii_masking import (
     detect_and_mask,
     detect_entities,
@@ -95,6 +99,25 @@ def run_analysis_pipeline(
                 clause,
                 result_data.reference_id,
             )
+
+            regenerated_pii = detect_entities(
+                result_data.summary,
+                avoid_preexisting_token_collisions=True,
+            )
+
+            if regenerated_pii:
+                raise ValueError(
+                    "Provider result summary contains regenerated personal data."
+                )
+
+            output_safety = check_summary_output(
+                result_data.summary,
+            )
+
+            if output_safety["classification"] != ALLOW:
+                raise ValueError(
+                    "Provider result summary failed output safety validation."
+                )
 
             job.result_items.append(
                 AnalysisResultItem(

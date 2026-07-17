@@ -549,3 +549,138 @@ def test_run_analysis_pipeline_blocks_provider_on_residual_pii(
     assert failed_job is not None
     assert failed_job.status == "failed"
     assert failed_job.result_items == []
+
+
+class UnsafeSummaryProvider:
+    def __init__(self, summary: str) -> None:
+        self.summary = summary
+
+    def analyze_clause(
+        self,
+        provider_input: AnalysisProviderInput,
+    ) -> AnalysisResultData:
+        return AnalysisResultData(
+            reference_id=provider_input.reference_id,
+            display_label="추가 확인",
+            summary=self.summary,
+            expert_review_recommended=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected_message"),
+    [
+        (
+            "이 조항은 위법이라고 확정합니다.",
+            "Provider result summary failed output safety validation",
+        ),
+        (
+            "인용과 판단이 혼합되어 추가 확인이 필요합니다.",
+            "Provider result summary failed output safety validation",
+        ),
+        (
+            "담당자 연락처는 010-1234-5678입니다.",
+            "Provider result summary contains regenerated personal data",
+        ),
+    ],
+)
+def test_run_analysis_pipeline_blocks_unsafe_provider_summary(
+    db_session: Session,
+    summary: str,
+    expected_message: str,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with pytest.raises(
+        ValueError,
+        match=expected_message,
+    ):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [clause],
+            provider=UnsafeSummaryProvider(summary),
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
+
+
+class PartiallyUnsafeSummaryProvider:
+    def analyze_clause(
+        self,
+        provider_input: AnalysisProviderInput,
+    ) -> AnalysisResultData:
+        summary = (
+            "추가 확인이 필요한 합성 분석 결과입니다."
+            if provider_input.reference_id.endswith(":clause:1")
+            else "이 조항은 무효라고 확정합니다."
+        )
+
+        return AnalysisResultData(
+            reference_id=provider_input.reference_id,
+            display_label="추가 확인",
+            summary=summary,
+            expert_review_recommended=False,
+        )
+
+
+def test_run_analysis_pipeline_rolls_back_partial_results_on_unsafe_output(
+    db_session: Session,
+) -> None:
+    document, first_clause = _create_document_and_clause(db_session)
+
+    second_clause = Clause(
+        id=str(uuid4()),
+        clause_id="clause-002",
+        reference_id=f"{document.id}:clause:2",
+        source_hash="second-source-hash",
+        ordinal=2,
+        marker="2.",
+        clause_type="normal",
+        title=None,
+        body="Second synthetic clause body.",
+        warnings=[],
+        document_id=document.id,
+    )
+    db_session.add(second_clause)
+    db_session.commit()
+    db_session.refresh(second_clause)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with pytest.raises(
+        ValueError,
+        match="Provider result summary failed output safety validation",
+    ):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [first_clause, second_clause],
+            provider=PartiallyUnsafeSummaryProvider(),
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
