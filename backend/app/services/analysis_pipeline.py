@@ -10,6 +10,11 @@ from backend.app.db.models import (
 from backend.app.services.analysis_provider import (
     DEFAULT_ANALYSIS_PROVIDER,
     AnalysisProvider,
+    AnalysisProviderInput,
+)
+from backend.app.services.pii_masking import (
+    detect_and_mask,
+    detect_entities,
 )
 
 
@@ -45,6 +50,31 @@ def validate_result_reference_id(
         )
 
 
+def build_provider_input(
+    clause: Clause,
+) -> AnalysisProviderInput:
+    masking_result = detect_and_mask(
+        clause.body,
+        avoid_preexisting_token_collisions=True,
+    )
+    masked_text = masking_result["masked_text"]
+
+    residual_entities = detect_entities(
+        masked_text,
+        avoid_preexisting_token_collisions=True,
+    )
+
+    if residual_entities:
+        raise ValueError(
+            "Residual personal data remains after masking."
+        )
+
+    return AnalysisProviderInput(
+        reference_id=clause.reference_id,
+        masked_text=masked_text,
+    )
+
+
 def run_analysis_pipeline(
     db: Session,
     job: AnalysisJob,
@@ -58,7 +88,8 @@ def run_analysis_pipeline(
         for clause in clauses:
             validate_reference_id(job.document_id, clause)
 
-            result_data = provider.analyze_clause(clause)
+            provider_input = build_provider_input(clause)
+            result_data = provider.analyze_clause(provider_input)
             result_data.validate()
             validate_result_reference_id(
                 clause,
