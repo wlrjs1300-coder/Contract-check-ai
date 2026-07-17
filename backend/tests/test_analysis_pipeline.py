@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from backend.app.db.models import AnalysisJob, Clause, Document
+from backend.app.services.analysis_provider import AnalysisProviderInput
 from backend.app.services.analysis_pipeline import (
     run_analysis_pipeline,
     validate_reference_id,
@@ -355,11 +356,11 @@ def test_run_analysis_pipeline_rejects_mismatched_result_reference_id(
 class PartiallyMismatchedReferenceProvider:
     def analyze_clause(
         self,
-        clause: Clause,
+        clause: AnalysisProviderInput,
     ) -> AnalysisResultData:
         reference_id = (
             clause.reference_id
-            if clause.ordinal == 1
+            if clause.reference_id.endswith(":clause:1")
             else "different-document:clause:999"
         )
 
@@ -418,6 +419,133 @@ def test_run_analysis_pipeline_rolls_back_partial_results_on_mismatch(
 
     failed_job = db_session.get(AnalysisJob, job.id)
 
+    assert failed_job is not None
+    assert failed_job.status == "failed"
+    assert failed_job.result_items == []
+
+
+class RecordingAnalysisProvider:
+    def __init__(self) -> None:
+        self.received_inputs: list[AnalysisProviderInput] = []
+
+    def analyze_clause(
+        self,
+        provider_input: AnalysisProviderInput,
+    ) -> AnalysisResultData:
+        self.received_inputs.append(provider_input)
+
+        return AnalysisResultData(
+            reference_id=provider_input.reference_id,
+            display_label="추가 확인",
+            summary="마스킹 입력 검증 결과입니다.",
+            expert_review_recommended=False,
+        )
+
+
+def test_run_analysis_pipeline_sends_only_masked_text_to_provider(
+    db_session: Session,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    original_body = "연락처: 010-1234-5678"
+    clause.body = original_body
+    db_session.commit()
+    db_session.refresh(clause)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    provider = RecordingAnalysisProvider()
+
+    run_analysis_pipeline(
+        db_session,
+        job,
+        [clause],
+        provider=provider,
+    )
+
+    assert len(provider.received_inputs) == 1
+
+    received_input = provider.received_inputs[0]
+
+    assert received_input.reference_id == clause.reference_id
+    assert received_input.masked_text == "연락처: [PHONE_1]"
+    assert "010-1234-5678" not in received_input.masked_text
+
+    db_session.refresh(clause)
+
+    assert clause.body == original_body
+    assert job.status == "completed"
+
+
+class CallTrackingProvider:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def analyze_clause(
+        self,
+        provider_input: AnalysisProviderInput,
+    ) -> AnalysisResultData:
+        self.call_count += 1
+
+        return AnalysisResultData(
+            reference_id=provider_input.reference_id,
+            display_label="추가 확인",
+            summary="호출 추적 결과입니다.",
+            expert_review_recommended=False,
+        )
+
+
+def test_run_analysis_pipeline_blocks_provider_on_residual_pii(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    def fake_detect_and_mask(
+        text: str,
+        avoid_preexisting_token_collisions: bool = False,
+    ) -> dict[str, object]:
+        return {
+            "masked_text": "연락처: 010-1234-5678",
+        }
+
+    monkeypatch.setattr(
+        "backend.app.services.analysis_pipeline.detect_and_mask",
+        fake_detect_and_mask,
+    )
+
+    provider = CallTrackingProvider()
+
+    with pytest.raises(
+        ValueError,
+        match="Residual personal data remains after masking",
+    ):
+        run_analysis_pipeline(
+            db_session,
+            job,
+            [clause],
+            provider=provider,
+        )
+
+    failed_job = db_session.get(AnalysisJob, job.id)
+
+    assert provider.call_count == 0
     assert failed_job is not None
     assert failed_job.status == "failed"
     assert failed_job.result_items == []
