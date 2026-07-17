@@ -35,6 +35,16 @@ def validate_reference_id(
         )
 
 
+def validate_result_reference_id(
+    clause: Clause,
+    result_reference_id: str,
+) -> None:
+    if result_reference_id != clause.reference_id:
+        raise ValueError(
+            "Provider result reference_id does not match the current clause."
+        )
+
+
 def run_analysis_pipeline(
     db: Session,
     job: AnalysisJob,
@@ -50,6 +60,10 @@ def run_analysis_pipeline(
 
             result_data = provider.analyze_clause(clause)
             result_data.validate()
+            validate_result_reference_id(
+                clause,
+                result_data.reference_id,
+            )
 
             job.result_items.append(
                 AnalysisResultItem(
