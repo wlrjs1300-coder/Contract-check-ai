@@ -168,7 +168,9 @@ contract-check-ai/
 ```text
 frontend/
 ├── package.json
-├── vite.config.js
+├── package-lock.json
+├── vite.config.ts
+├── tsconfig.json
 ├── index.html
 └── src/
     ├── api/
@@ -177,6 +179,7 @@ frontend/
     ├── pages/
     ├── routes/
     ├── hooks/
+    ├── types/
     ├── utils/
     └── styles/
 ```

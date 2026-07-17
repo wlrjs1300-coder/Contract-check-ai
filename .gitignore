@@ -24,6 +24,7 @@ node_modules/
 dist/
 build/
 .vite/
+coverage/
 
 # python/backend
 .venv/
