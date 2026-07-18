@@ -19,5 +19,49 @@ body {
 }
 
 main {
-  max-width: 820px;
+  max-width: 960px;
+}
+
+.selected-file,
+.document-summary {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.selected-file div,
+.document-summary div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.35fr) 1fr;
+  gap: 1rem;
+}
+
+.selected-file dt,
+.document-summary dt {
+  color: #566176;
+  font-weight: 600;
+}
+
+.selected-file dd,
+.document-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.results-layout {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.clause-body,
+.unclassified-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 575.98px) {
+  .selected-file div,
+  .document-summary div {
+    grid-template-columns: 1fr;
+    gap: 0.125rem;
+  }
 }

@@ -161,9 +161,9 @@ contract-check-ai/
     └── samples/
 ```
 
-## 4. 향후 프론트엔드 폴더 구조
+## 4. 현재 프론트엔드 폴더 구조
 
-프론트엔드 구현 단계에서 `frontend/`를 생성할 때 다음 구조를 기준으로 검토한다.
+v0.4 프론트엔드 구현은 다음 구조를 사용한다.
 
 ```text
 frontend/
@@ -174,13 +174,24 @@ frontend/
 ├── index.html
 └── src/
     ├── api/
+    │   ├── config.ts
+    │   ├── documents.ts
+    │   └── http.ts
     ├── assets/
     ├── components/
+    │   ├── ClauseList.tsx
+    │   ├── DocumentSummary.tsx
+    │   ├── DocumentUploadForm.tsx
+    │   ├── UnclassifiedSections.tsx
+    │   └── WarningList.tsx
     ├── pages/
+    │   └── ScaffoldPage.tsx
     ├── routes/
     ├── hooks/
     ├── types/
+    │   └── documents.ts
     ├── utils/
+    │   └── documentUpload.ts
     └── styles/
 ```
 
