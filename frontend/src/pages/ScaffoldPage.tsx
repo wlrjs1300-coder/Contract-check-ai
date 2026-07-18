@@ -1,5 +1,7 @@
 import { useState } from 'react'
+import { createAnalysisJob, getAnalysisJob } from '../api/analysisJobs'
 import { uploadDocument } from '../api/documents'
+import { AnalysisJobPanel } from '../components/AnalysisJobPanel'
 import { ClauseList } from '../components/ClauseList'
 import { DocumentSummary } from '../components/DocumentSummary'
 import { DocumentUploadForm } from '../components/DocumentUploadForm'
@@ -7,6 +9,11 @@ import { UnclassifiedSections } from '../components/UnclassifiedSections'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import brandMark from '../assets/brand-mark.svg'
 import type { UploadedDocument } from '../types/documents'
+import type { AnalysisJob } from '../types/analysisJobs'
+import {
+  getAnalysisRefreshErrorMessage,
+  getAnalysisRequestErrorMessage,
+} from '../utils/analysisJob'
 import {
   getUploadErrorMessage,
   validateUploadFile,
@@ -20,16 +27,31 @@ export function ScaffoldPage() {
   const [status, setStatus] = useState<UploadStatus>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [document, setDocument] = useState<UploadedDocument | null>(null)
+  const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null)
+  const [isCreatingAnalysis, setIsCreatingAnalysis] = useState(false)
+  const [isRefreshingAnalysis, setIsRefreshingAnalysis] = useState(false)
+  const [analysisRequestError, setAnalysisRequestError] = useState<string | null>(null)
+  const [analysisRefreshError, setAnalysisRefreshError] = useState<string | null>(null)
+  const isAnalysisBusy = isCreatingAnalysis || isRefreshingAnalysis
+
+  function resetAnalysisState() {
+    setAnalysisJob(null)
+    setIsCreatingAnalysis(false)
+    setIsRefreshingAnalysis(false)
+    setAnalysisRequestError(null)
+    setAnalysisRefreshError(null)
+  }
 
   function handleFileChange(file: File | null) {
     setSelectedFile(file)
     setStatus(file ? 'selected' : 'idle')
     setErrorMessage(null)
     setDocument(null)
+    resetAnalysisState()
   }
 
   async function handleUpload() {
-    if (status === 'uploading') {
+    if (status === 'uploading' || isAnalysisBusy) {
       return
     }
 
@@ -49,14 +71,67 @@ export function ScaffoldPage() {
     setStatus('uploading')
     setErrorMessage(null)
     setDocument(null)
+    resetAnalysisState()
 
     try {
       const uploadedDocument = await uploadDocument(file)
       setDocument(uploadedDocument)
+      resetAnalysisState()
       setStatus('success')
     } catch (error) {
       setStatus('error')
       setErrorMessage(getUploadErrorMessage(error))
+    }
+  }
+
+  async function handleAnalysisStart() {
+    if (
+      document === null ||
+      document.document_id.trim().length === 0 ||
+      document.clauses.length === 0 ||
+      isAnalysisBusy
+    ) {
+      return
+    }
+
+    setIsCreatingAnalysis(true)
+    setAnalysisJob(null)
+    setAnalysisRequestError(null)
+    setAnalysisRefreshError(null)
+
+    try {
+      const job = await createAnalysisJob(document.document_id)
+      setAnalysisJob(job)
+    } catch (error) {
+      setAnalysisRequestError(getAnalysisRequestErrorMessage(error))
+    } finally {
+      setIsCreatingAnalysis(false)
+    }
+  }
+
+  async function handleAnalysisRefresh() {
+    if (
+      document === null ||
+      analysisJob === null ||
+      !['queued', 'processing'].includes(analysisJob.status) ||
+      isAnalysisBusy
+    ) {
+      return
+    }
+
+    setIsRefreshingAnalysis(true)
+    setAnalysisRefreshError(null)
+
+    try {
+      const job = await getAnalysisJob(
+        analysisJob.job_id,
+        document.document_id,
+      )
+      setAnalysisJob(job)
+    } catch (error) {
+      setAnalysisRefreshError(getAnalysisRefreshErrorMessage(error))
+    } finally {
+      setIsRefreshingAnalysis(false)
     }
   }
 
@@ -80,6 +155,7 @@ export function ScaffoldPage() {
       <DocumentUploadForm
         selectedFile={selectedFile}
         isUploading={status === 'uploading'}
+        isDisabled={isAnalysisBusy}
         onFileChange={handleFileChange}
         onSubmit={handleUpload}
       />
@@ -98,6 +174,19 @@ export function ScaffoldPage() {
       {document && (
         <div className="results-layout mt-4">
           <DocumentSummary document={document} />
+          <AnalysisJobPanel
+            canStart={
+              document.document_id.trim().length > 0 &&
+              document.clauses.length > 0
+            }
+            isCreating={isCreatingAnalysis}
+            isRefreshing={isRefreshingAnalysis}
+            job={analysisJob}
+            requestError={analysisRequestError}
+            refreshError={analysisRefreshError}
+            onStart={handleAnalysisStart}
+            onRefresh={handleAnalysisRefresh}
+          />
           <UnclassifiedSections sections={document.unclassified_sections} />
           <ClauseList clauses={document.clauses} />
         </div>
