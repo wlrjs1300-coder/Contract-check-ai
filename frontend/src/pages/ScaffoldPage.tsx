@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { createAnalysisJob, getAnalysisJob } from '../api/analysisJobs'
+import { getAnalysisResults } from '../api/analysisResults'
 import { uploadDocument } from '../api/documents'
 import { AnalysisJobPanel } from '../components/AnalysisJobPanel'
+import { AnalysisResultsPanel } from '../components/AnalysisResultsPanel'
 import { ClauseList } from '../components/ClauseList'
 import { DocumentSummary } from '../components/DocumentSummary'
 import { DocumentUploadForm } from '../components/DocumentUploadForm'
@@ -10,6 +12,12 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import brandMark from '../assets/brand-mark.svg'
 import type { UploadedDocument } from '../types/documents'
 import type { AnalysisJob } from '../types/analysisJobs'
+import type { LinkedAnalysisResult } from '../utils/analysisResult'
+import {
+  ANALYSIS_LINK_ERROR_MESSAGE,
+  getAnalysisResultsErrorMessage,
+  linkAnalysisResults,
+} from '../utils/analysisResult'
 import {
   getAnalysisRefreshErrorMessage,
   getAnalysisRequestErrorMessage,
@@ -32,7 +40,16 @@ export function ScaffoldPage() {
   const [isRefreshingAnalysis, setIsRefreshingAnalysis] = useState(false)
   const [analysisRequestError, setAnalysisRequestError] = useState<string | null>(null)
   const [analysisRefreshError, setAnalysisRefreshError] = useState<string | null>(null)
-  const isAnalysisBusy = isCreatingAnalysis || isRefreshingAnalysis
+  const [isLoadingResults, setIsLoadingResults] = useState(false)
+  const [analysisResults, setAnalysisResults] = useState<LinkedAnalysisResult[] | null>(null)
+  const [analysisResultsError, setAnalysisResultsError] = useState<string | null>(null)
+  const isAnalysisBusy = isCreatingAnalysis || isRefreshingAnalysis || isLoadingResults
+
+  function resetResultsState() {
+    setIsLoadingResults(false)
+    setAnalysisResults(null)
+    setAnalysisResultsError(null)
+  }
 
   function resetAnalysisState() {
     setAnalysisJob(null)
@@ -40,6 +57,7 @@ export function ScaffoldPage() {
     setIsRefreshingAnalysis(false)
     setAnalysisRequestError(null)
     setAnalysisRefreshError(null)
+    resetResultsState()
   }
 
   function handleFileChange(file: File | null) {
@@ -98,10 +116,12 @@ export function ScaffoldPage() {
     setAnalysisJob(null)
     setAnalysisRequestError(null)
     setAnalysisRefreshError(null)
+    resetResultsState()
 
     try {
       const job = await createAnalysisJob(document.document_id)
       setAnalysisJob(job)
+      if (job.status !== 'completed') resetResultsState()
     } catch (error) {
       setAnalysisRequestError(getAnalysisRequestErrorMessage(error))
     } finally {
@@ -128,10 +148,41 @@ export function ScaffoldPage() {
         document.document_id,
       )
       setAnalysisJob(job)
+      if (job.status !== 'completed') resetResultsState()
     } catch (error) {
       setAnalysisRefreshError(getAnalysisRefreshErrorMessage(error))
     } finally {
       setIsRefreshingAnalysis(false)
+    }
+  }
+
+  async function handleViewResults() {
+    if (
+      document === null ||
+      analysisJob?.status !== 'completed' ||
+      isAnalysisBusy
+    ) return
+
+    setIsLoadingResults(true)
+    setAnalysisResults(null)
+    setAnalysisResultsError(null)
+    try {
+      const response = await getAnalysisResults(
+        document.document_id,
+        analysisJob.job_id,
+      )
+      if (response.status !== 'completed') {
+        throw new Error('Results are not completed.')
+      }
+      try {
+        setAnalysisResults(linkAnalysisResults(document.clauses, response.items))
+      } catch {
+        setAnalysisResultsError(ANALYSIS_LINK_ERROR_MESSAGE)
+      }
+    } catch (error) {
+      setAnalysisResultsError(getAnalysisResultsErrorMessage(error))
+    } finally {
+      setIsLoadingResults(false)
     }
   }
 
@@ -147,8 +198,7 @@ export function ScaffoldPage() {
         <h1 className="display-6 fw-bold">TXT 문서 업로드와 조항 확인</h1>
         <p className="lead text-secondary mb-0">
           현재 기술 검증 단계에서는 UTF-8 TXT 파일 한 개를 최대 1MB까지
-          업로드하고 분리된 조항을 확인할 수 있습니다. 분석 결과는 아직
-          제공하지 않습니다.
+          업로드하고 분리된 조항과 합성 분석 결과를 확인할 수 있습니다.
         </p>
       </header>
 
@@ -181,11 +231,18 @@ export function ScaffoldPage() {
             }
             isCreating={isCreatingAnalysis}
             isRefreshing={isRefreshingAnalysis}
+            isLoadingResults={isLoadingResults}
             job={analysisJob}
             requestError={analysisRequestError}
             refreshError={analysisRefreshError}
             onStart={handleAnalysisStart}
             onRefresh={handleAnalysisRefresh}
+            onViewResults={handleViewResults}
+          />
+          <AnalysisResultsPanel
+            isLoading={isLoadingResults}
+            results={analysisResults}
+            error={analysisResultsError}
           />
           <UnclassifiedSections sections={document.unclassified_sections} />
           <ClauseList clauses={document.clauses} />
