@@ -45,7 +45,7 @@ export function getAnalysisResultsErrorMessage(error: unknown): string {
       return '저장된 분석 결과를 찾지 못했습니다.'
     }
   }
-  return '분석 결과를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'
+  return '분석 결과를 불러오지 못했습니다. 분석 결과 보기를 다시 눌러 주세요.'
 }
 
 export const ANALYSIS_LINK_ERROR_MESSAGE =

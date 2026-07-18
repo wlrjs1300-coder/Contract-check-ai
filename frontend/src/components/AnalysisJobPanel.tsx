@@ -42,8 +42,8 @@ export function AnalysisJobPanel({
           분석 작업 상태
         </h2>
         <p className="text-secondary">
-          현재 분석 작업과 결과는 화면과 API 흐름 검증을 위한 합성 처리입니다.
-          실제 외부 분석 품질이나 법률 판단을 의미하지 않습니다.
+          분석을 시작한 뒤 작업 상태를 확인하고, 완료되면 결과를 조회할 수
+          있습니다.
         </p>
 
         {!canStart && job === null && (
@@ -74,7 +74,7 @@ export function AnalysisJobPanel({
           </p>
         )}
 
-        <div className="d-flex flex-wrap gap-2">
+        <div className="action-buttons d-flex flex-wrap gap-2">
           <button
             type="button"
             className="btn btn-primary"

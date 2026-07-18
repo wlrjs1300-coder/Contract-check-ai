@@ -413,7 +413,7 @@ describe('analysis job flow', () => {
     fireEvent.click(screen.getByRole('button', { name: '상태 다시 확인' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      '분석 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+      '분석 상태를 확인하지 못했습니다. 기존 작업 상태는 유지됩니다. 다시 시도해 주세요.',
     )
     expect(screen.getByText('분석 작업이 대기 중입니다.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '상태 다시 확인' })).toBeEnabled()
@@ -422,7 +422,7 @@ describe('analysis job flow', () => {
   it.each([
     [
       () => Promise.resolve(new Response('failure', { status: 500 })),
-      '분석 요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+      '분석 요청을 완료하지 못했습니다. 분석 시작을 다시 눌러 주세요.',
     ],
     [
       () => Promise.reject(new TypeError('network unavailable')),
@@ -430,7 +430,7 @@ describe('analysis job flow', () => {
     ],
     [
       () => Promise.resolve(jsonResponse({ job_id: '' })),
-      '분석 요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+      '분석 요청을 완료하지 못했습니다. 분석 시작을 다시 눌러 주세요.',
     ],
   ])('renders a safe analysis request error', async (analysisResponse, message) => {
     const fetchMock = vi
@@ -537,8 +537,8 @@ describe('analysis results flow', () => {
 
   it.each([
     [jsonResponse({ detail: 'Analysis result not found.' }, 404), '저장된 분석 결과를 찾지 못했습니다.'],
-    [new Response('failure', { status: 500 }), '분석 결과를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'],
-    [jsonResponse({ ...analysisResults(), job_id: 'other' }), '분석 결과를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'],
+    [new Response('failure', { status: 500 }), '분석 결과를 불러오지 못했습니다. 분석 결과 보기를 다시 눌러 주세요.'],
+    [jsonResponse({ ...analysisResults(), job_id: 'other' }), '분석 결과를 불러오지 못했습니다. 분석 결과 보기를 다시 눌러 주세요.'],
   ])('shows a safe result error', async (response, message) => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse(successfulDocument))
@@ -573,5 +573,91 @@ describe('analysis results flow', () => {
     await completeAnalysis(fetchMock)
     fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('서버에 연결하지 못했습니다')
+  })
+})
+
+describe('frontend polish', () => {
+  it('keeps the file input label and exposes upload progress without a global busy state', async () => {
+    let resolveUpload: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolveUpload = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    const input = screen.getByLabelText('계약 문서')
+    expect(input).toHaveAttribute('id', 'document-file')
+    selectFile(new File(['제1조 합성 본문'], 'sample.txt'))
+    fireEvent.click(screen.getByRole('button', { name: '문서 업로드' }))
+
+    expect(screen.getByRole('status')).toHaveTextContent('문서를 업로드하고 있습니다.')
+    expect(screen.getByRole('button', { name: '업로드 중…' })).toBeDisabled()
+    expect(screen.getByRole('main')).not.toHaveAttribute('aria-busy')
+    resolveUpload?.(jsonResponse(successfulDocument))
+    await screen.findByRole('heading', { name: '업로드 결과' })
+  })
+
+  it('retries an analysis request with the same document', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(new Response('failure', { status: 500 }))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    await uploadSuccessfulDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('분석 시작을 다시 눌러 주세요.')
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    expect(await screen.findByText('분석 작업이 완료되었습니다.')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('retries status lookup while preserving the existing job', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('queued')))
+      .mockResolvedValueOnce(new Response('failure', { status: 500 }))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    await screen.findByText('분석 작업이 대기 중입니다.')
+
+    fireEvent.click(screen.getByRole('button', { name: '상태 다시 확인' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('기존 작업 상태는 유지됩니다.')
+    fireEvent.click(screen.getByRole('button', { name: '상태 다시 확인' }))
+    expect(await screen.findByText('분석 작업이 완료되었습니다.')).toBeInTheDocument()
+  })
+
+  it('retries result lookup and renders long synthetic text', async () => {
+    const longText = '긴합성문자열'.repeat(80)
+    const longDocument = {
+      ...successfulDocument,
+      filename: `${longText}.txt`,
+      clauses: [{ ...successfulDocument.clauses[0], marker: longText, title: longText }],
+    }
+    const longResults = {
+      ...analysisResults(),
+      items: [{ ...analysisResults().items[0], summary: `${longText}\n${longText}` }],
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(longDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+      .mockResolvedValueOnce(new Response('failure', { status: 500 }))
+      .mockResolvedValueOnce(jsonResponse(longResults))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    await screen.findByText('분석 작업이 완료되었습니다.')
+
+    fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('분석 결과 보기를 다시 눌러 주세요.')
+    fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+    await screen.findByRole('heading', { name: '분석 결과' })
+    expect(document.querySelector('.analysis-summary')).toHaveTextContent(
+      `${longText} ${longText}`,
+    )
+    expect(screen.getAllByText(longText).length).toBeGreaterThanOrEqual(2)
   })
 })

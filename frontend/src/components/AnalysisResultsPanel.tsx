@@ -41,15 +41,15 @@ export function AnalysisResultsPanel({
           {results.map(({ clause, result }) => (
             <article className="card border-0 shadow-sm" key={result.reference_id}>
               <div className="card-body p-4">
-                <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
+                <div className="item-metadata d-flex flex-wrap align-items-center gap-2 mb-2">
                   <span className="badge text-bg-secondary">{clause.ordinal}번째 조항</span>
-                  {clause.marker && <span className="fw-semibold">{clause.marker}</span>}
-                  {clause.clause_type && <span className="text-secondary small">{clause.clause_type}</span>}
-                  <span className={`badge ${LABEL_CLASSES[result.display_label]}`}>
+                  {clause.marker && <span className="item-text fw-semibold">{clause.marker}</span>}
+                  {clause.clause_type && <span className="item-text text-secondary small">{clause.clause_type}</span>}
+                  <span className={`result-label badge ${LABEL_CLASSES[result.display_label]}`}>
                     {result.display_label}
                   </span>
                 </div>
-                {clause.title && <h3 className="h5">{clause.title}</h3>}
+                {clause.title && <h3 className="item-title h5">{clause.title}</h3>}
                 <p className="analysis-summary mb-3">{result.summary}</p>
                 <p className="mb-0 fw-semibold">
                   {result.expert_review_recommended
