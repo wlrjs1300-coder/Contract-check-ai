@@ -205,12 +205,18 @@ frontend/
     ├── components/
     │   ├── AnalysisJobPanel.tsx
     │   ├── AnalysisResultsPanel.tsx
+    │   ├── AnalysisStepper.tsx
+    │   ├── AppFrame.tsx
     │   ├── ClauseList.tsx
     │   ├── DocumentSummary.tsx
     │   ├── DocumentUploadForm.tsx
+    │   ├── TopNavigation.tsx
     │   ├── UnclassifiedSections.tsx
     │   └── WarningList.tsx
     ├── pages/
+    │   ├── AnalyzePage.tsx
+    │   ├── HomePage.tsx
+    │   ├── ResultsPage.tsx
     │   └── ScaffoldPage.tsx
     ├── routes/
     ├── hooks/

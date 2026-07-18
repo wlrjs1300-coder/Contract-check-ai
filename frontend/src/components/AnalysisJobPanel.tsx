@@ -33,7 +33,7 @@ export function AnalysisJobPanel({
 
   return (
     <section
-      className="card border-0 shadow-sm"
+      className="card"
       aria-labelledby="analysis-title"
       aria-busy={isBusy}
     >

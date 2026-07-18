@@ -37,6 +37,9 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 function selectFile(file: File) {
+  if (screen.queryByLabelText('계약 문서') === null) {
+    fireEvent.click(screen.getByRole('link', { name: '계약서 분석' }))
+  }
   fireEvent.change(screen.getByLabelText('계약 문서'), {
     target: { files: [file] },
   })
@@ -81,27 +84,36 @@ describe('App', () => {
   it('renders the service name', () => {
     render(<App />)
 
-    expect(screen.getByText('ContractCheck AI')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'PACTA 홈' })).toBeInTheDocument()
   })
 
   it('renders the current upload scope', () => {
     render(<App />)
 
-    expect(
-      screen.getByRole('heading', { name: 'TXT 문서 업로드와 조항 확인' }),
-    ).toBeInTheDocument()
-    expect(screen.getByText(/합성 분석 결과를 확인할 수 있습니다/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /복잡한 계약서/ })).toBeInTheDocument()
+    expect(screen.getByText(/조항별 핵심과 검토 필요 항목/)).toBeInTheDocument()
   })
 
   it('does not request an upload without a selected file', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
+    fireEvent.click(screen.getByRole('link', { name: '계약서 분석' }))
 
-    fireEvent.click(screen.getByRole('button', { name: '문서 업로드' }))
-
-    expect(screen.getByRole('alert')).toHaveTextContent('파일을 선택해 주세요.')
+    expect(screen.queryByRole('button', { name: '문서 업로드' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '선택 초기화' })).toBeDisabled()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('clears the selected file with the reset action', () => {
+    render(<App />)
+    selectFile(new File(['제1조 합성 본문'], 'sample.txt'))
+
+    expect(screen.getByText('sample.txt')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '선택 초기화' }))
+
+    expect(screen.queryByText('sample.txt')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '문서 업로드' })).not.toBeInTheDocument()
   })
 
   it.each([
@@ -484,7 +496,7 @@ describe('analysis results flow', () => {
     await completeAnalysis(fetchMock)
 
     fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
-    expect(await screen.findByRole('heading', { name: '분석 결과' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '검토 결과' })).toBeInTheDocument()
     expect(screen.getByText('위험')).toBeInTheDocument()
     expect(screen.getByText('합성 결과 <strong>강조하지 않음</strong>', { exact: false })).toBeInTheDocument()
     expect(document.querySelector('strong')?.textContent).not.toBe('강조하지 않음')
@@ -562,7 +574,7 @@ describe('analysis results flow', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('분석 결과와 문서 조항을 연결하지 못했습니다')
 
     selectFile(new File(['제1조 새 합성 본문'], 'next.txt'))
-    expect(screen.queryByRole('heading', { name: '분석 결과' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '검토 결과' })).not.toBeInTheDocument()
   })
 
   it('shows network failure without an actual request', async () => {
@@ -582,6 +594,7 @@ describe('frontend polish', () => {
     const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolveUpload = resolve }))
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
+    fireEvent.click(screen.getByRole('link', { name: '계약서 분석' }))
 
     const input = screen.getByLabelText('계약 문서')
     expect(input).toHaveAttribute('id', 'document-file')
@@ -654,10 +667,105 @@ describe('frontend polish', () => {
     fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('분석 결과 보기를 다시 눌러 주세요.')
     fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
-    await screen.findByRole('heading', { name: '분석 결과' })
+    await screen.findByRole('heading', { name: '검토 결과' })
     expect(document.querySelector('.analysis-summary')).toHaveTextContent(
       `${longText} ${longText}`,
     )
     expect(screen.getAllByText(longText).length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('framed multipage layout', () => {
+  it('renders the frame, three page links, and current page state', () => {
+    render(<App />)
+
+    expect(document.querySelector('.app-shell')).toBeInTheDocument()
+    const pageNavigation = screen.getByRole('navigation', { name: '페이지 메뉴' })
+    for (const href of ['/', '/analyze', '/results']) {
+      expect(pageNavigation.querySelector(`a[href="${href}"]`)).toBeInTheDocument()
+    }
+    expect(screen.getByRole('link', { name: '홈' })).toHaveAttribute('aria-current', 'page')
+    expect(document.querySelector('.page-transition')).toBeInTheDocument()
+  })
+
+  it('moves between main, analyze, and empty results pages', () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('link', { name: '계약서 분석' }))
+    expect(screen.getByRole('heading', { name: '계약서 분석' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '계약서 분석' })).toHaveAttribute('aria-current', 'page')
+
+    fireEvent.click(screen.getByRole('link', { name: '분석 결과' }))
+    expect(screen.getByText(/표시할 분석 결과가 없습니다/)).toBeInTheDocument()
+
+  })
+
+  it('preserves the uploaded document while changing pages', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(successfulDocument)))
+    render(<App />)
+    await uploadSuccessfulDocument()
+
+    fireEvent.click(screen.getByRole('link', { name: '홈' }))
+    fireEvent.click(screen.getByRole('link', { name: '계약서 분석' }))
+    expect(screen.getByText('sample.TXT')).toBeInTheDocument()
+  })
+
+  it('selects the first result and supports direct and sequential clause navigation', async () => {
+    const secondClause = {
+      ...successfulDocument.clauses[0],
+      clause_id: 'clause-002',
+      reference_id: 'document-test:clause:2',
+      ordinal: 2,
+      marker: '제2조',
+      title: '기간',
+      body: '합성 문서의 기간을 정합니다.',
+    }
+    const twoClauseDocument = {
+      ...successfulDocument,
+      clause_count: 2,
+      clauses: [successfulDocument.clauses[0], secondClause],
+    }
+    const twoResults = {
+      ...analysisResults(),
+      items: [
+        analysisResults().items[0],
+        {
+          ...analysisResults().items[0],
+          clause_id: secondClause.clause_id,
+          reference_id: secondClause.reference_id,
+          summary: '두 번째 합성 결과',
+        },
+      ],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(twoClauseDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+      .mockResolvedValueOnce(jsonResponse(twoResults))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    await screen.findByText('분석 작업이 완료되었습니다.')
+    fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+    await screen.findByRole('heading', { name: '검토 결과' })
+
+    const firstClause = screen.getByRole('button', { name: /1번째 조항 선택/ })
+    const previous = screen.getByRole('button', { name: '이전 조항' })
+    const next = screen.getByRole('button', { name: '다음 조항' })
+    expect(firstClause).toHaveAttribute('aria-current', 'true')
+    expect(previous).toBeDisabled()
+    expect(next).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /2번째 조항 선택/ }))
+    expect(screen.getByRole('heading', { name: '기간' })).toBeInTheDocument()
+    expect(next).toBeDisabled()
+    expect(previous).toBeEnabled()
+    fireEvent.click(previous)
+    expect(firstClause).toHaveAttribute('aria-current', 'true')
+
+    fireEvent.click(screen.getByRole('link', { name: '계약서 분석' }))
+    expect(screen.getByRole('listitem', { name: '4단계 결과 확인: 완료' })).toBeInTheDocument()
   })
 })

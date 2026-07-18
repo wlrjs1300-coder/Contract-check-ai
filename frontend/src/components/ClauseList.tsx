@@ -23,8 +23,8 @@ export function ClauseList({ clauses }: ClauseListProps) {
       ) : (
         <div className="d-grid gap-3">
           {orderedClauses.map((clause) => (
-            <article className="card border-0 shadow-sm" key={clause.reference_id}>
-              <div className="card-body p-4">
+            <article className="card" key={clause.reference_id}>
+              <div className="card-body">
                 <div className="item-metadata d-flex flex-wrap align-items-center gap-2 mb-2">
                   <span className="badge text-bg-secondary">
                     {clause.ordinal}번째 조항
