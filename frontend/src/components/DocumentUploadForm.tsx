@@ -62,7 +62,7 @@ export function DocumentUploadForm({
 
           <button
             type="submit"
-            className="btn btn-primary mt-4"
+            className="btn btn-primary mt-4 upload-action"
             disabled={isUploading || isDisabled}
           >
             {isUploading ? '업로드 중…' : '문서 업로드'}

@@ -187,7 +187,7 @@ export function ScaffoldPage() {
   }
 
   return (
-    <main className="container py-5" aria-busy={status === 'uploading'}>
+    <main className="container py-4 py-md-5">
       <header className="mb-4">
         <div className="d-flex align-items-center gap-3 mb-3">
           <img src={brandMark} width="48" height="48" alt="" />
@@ -200,6 +200,10 @@ export function ScaffoldPage() {
           현재 기술 검증 단계에서는 UTF-8 TXT 파일 한 개를 최대 1MB까지
           업로드하고 분리된 조항과 합성 분석 결과를 확인할 수 있습니다.
         </p>
+        <p className="text-secondary mt-2 mb-0">
+          합성 Provider를 사용하는 화면·API 흐름 검증용 서비스이며 법률
+          자문이나 최종 판단을 제공하지 않습니다.
+        </p>
       </header>
 
       <DocumentUploadForm
@@ -210,9 +214,11 @@ export function ScaffoldPage() {
         onSubmit={handleUpload}
       />
 
-      <div className="mt-3" aria-live="polite">
+      <div className="mt-3">
         {status === 'uploading' && (
-          <p className="alert alert-info mb-0">문서를 업로드하고 있습니다.</p>
+          <p className="alert alert-info mb-0" role="status">
+            문서를 업로드하고 있습니다.
+          </p>
         )}
         {errorMessage && (
           <p className="alert alert-danger mb-0" role="alert">

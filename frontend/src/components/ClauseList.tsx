@@ -25,16 +25,16 @@ export function ClauseList({ clauses }: ClauseListProps) {
           {orderedClauses.map((clause) => (
             <article className="card border-0 shadow-sm" key={clause.reference_id}>
               <div className="card-body p-4">
-                <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
+                <div className="item-metadata d-flex flex-wrap align-items-center gap-2 mb-2">
                   <span className="badge text-bg-secondary">
                     {clause.ordinal}번째 조항
                   </span>
-                  {clause.marker && <span className="fw-semibold">{clause.marker}</span>}
+                  {clause.marker && <span className="item-text fw-semibold">{clause.marker}</span>}
                   {clause.clause_type && (
-                    <span className="text-secondary small">{clause.clause_type}</span>
+                    <span className="item-text text-secondary small">{clause.clause_type}</span>
                   )}
                 </div>
-                {clause.title && <h3 className="h5">{clause.title}</h3>}
+                {clause.title && <h3 className="item-title h5">{clause.title}</h3>}
                 <p className="clause-body mb-3">{clause.body || '본문이 없습니다.'}</p>
                 <WarningList warnings={clause.warnings} title="조항 처리 확인 정보" />
               </div>
