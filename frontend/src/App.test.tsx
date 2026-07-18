@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import type { AnalysisJobStatus } from './types/analysisJobs'
 import type { UploadedDocument } from './types/documents'
 
 const successfulDocument: UploadedDocument = {
@@ -39,6 +40,20 @@ function selectFile(file: File) {
   fireEvent.change(screen.getByLabelText('계약 문서'), {
     target: { files: [file] },
   })
+}
+
+function analysisJob(status: AnalysisJobStatus) {
+  return {
+    job_id: 'job-test',
+    document_id: successfulDocument.document_id,
+    status,
+  }
+}
+
+async function uploadSuccessfulDocument() {
+  selectFile(new File(['제1조 합성 본문'], 'sample.txt'))
+  fireEvent.click(screen.getByRole('button', { name: '문서 업로드' }))
+  await screen.findByRole('heading', { name: '업로드 결과' })
 }
 
 afterEach(() => {
@@ -222,5 +237,215 @@ describe('App', () => {
 
     selectFile(new File(['합성 본문'], 'third.txt'))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('analysis job flow', () => {
+  it('does not show analysis controls before a successful upload', () => {
+    render(<App />)
+
+    expect(screen.queryByRole('button', { name: '분석 시작' })).not.toBeInTheDocument()
+  })
+
+  it('blocks analysis when the uploaded document has no clauses', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ ...successfulDocument, clause_count: 0, clauses: [] }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+
+    expect(screen.getByRole('button', { name: '분석 시작' })).toBeDisabled()
+    expect(screen.getByText(/분리된 조항이 없어 분석을 시작할 수 없습니다/)).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('creates an analysis job and renders completed without fetching results', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+
+    expect(await screen.findByText('분석 작업이 완료되었습니다.')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'http://localhost:8000/documents/document-test/analysis-jobs',
+      { method: 'POST' },
+    )
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes('analysis-results')),
+    ).toBe(false)
+  })
+
+  it('prevents duplicate analysis and document changes while creating', async () => {
+    let resolveAnalysis: ((response: Response) => void) | undefined
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveAnalysis = resolve
+          }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+
+    const creatingButton = screen.getByRole('button', { name: '분석 요청 중…' })
+    expect(creatingButton).toBeDisabled()
+    expect(screen.getByLabelText('계약 문서')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '문서 업로드' })).toBeDisabled()
+    fireEvent.click(creatingButton)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    resolveAnalysis?.(jsonResponse(analysisJob('completed')))
+    await screen.findByText('분석 작업이 완료되었습니다.')
+  })
+
+  it.each<[AnalysisJobStatus, string]>([
+    ['queued', '분석 작업이 대기 중입니다.'],
+    ['processing', '분석 작업을 처리 중입니다.'],
+    ['failed', '분석 작업을 완료하지 못했습니다. 다시 시도해 주세요.'],
+  ])('renders the %s response state', async (status, message) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob(status)))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+
+    expect(await screen.findByText(message)).toBeInTheDocument()
+  })
+
+  it('refreshes a queued job once and applies completed', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('queued')))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    await screen.findByText('분석 작업이 대기 중입니다.')
+    fireEvent.click(screen.getByRole('button', { name: '상태 다시 확인' }))
+
+    expect(await screen.findByText('분석 작업이 완료되었습니다.')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'http://localhost:8000/analysis-jobs/job-test',
+      { method: 'GET' },
+    )
+  })
+
+  it('prevents duplicate status lookups and document changes while refreshing', async () => {
+    let resolveRefresh: ((response: Response) => void) | undefined
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('processing')))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveRefresh = resolve
+          }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    await screen.findByText('분석 작업을 처리 중입니다.')
+    fireEvent.click(screen.getByRole('button', { name: '상태 다시 확인' }))
+
+    const refreshButton = screen.getByRole('button', { name: '상태 확인 중…' })
+    expect(refreshButton).toBeDisabled()
+    expect(screen.getByLabelText('계약 문서')).toBeDisabled()
+    fireEvent.click(refreshButton)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+
+    resolveRefresh?.(jsonResponse(analysisJob('failed')))
+    await screen.findByText('분석 작업을 완료하지 못했습니다. 다시 시도해 주세요.')
+  })
+
+  it('keeps job status separate when a status lookup fails', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('queued')))
+      .mockResolvedValueOnce(new Response('failure', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    await screen.findByText('분석 작업이 대기 중입니다.')
+    fireEvent.click(screen.getByRole('button', { name: '상태 다시 확인' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '분석 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    )
+    expect(screen.getByText('분석 작업이 대기 중입니다.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '상태 다시 확인' })).toBeEnabled()
+  })
+
+  it.each([
+    [
+      () => Promise.resolve(new Response('failure', { status: 500 })),
+      '분석 요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    ],
+    [
+      () => Promise.reject(new TypeError('network unavailable')),
+      '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    ],
+    [
+      () => Promise.resolve(jsonResponse({ job_id: '' })),
+      '분석 요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    ],
+  ])('renders a safe analysis request error', async (analysisResponse, message) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockImplementationOnce(analysisResponse)
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message)
+    expect(screen.getByRole('button', { name: '분석 시작' })).toBeEnabled()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears the previous analysis state when a new file is selected', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    await screen.findByText('분석 작업이 완료되었습니다.')
+
+    selectFile(new File(['제1조 새 합성 본문'], 'next.txt'))
+
+    expect(screen.queryByText('분석 작업이 완료되었습니다.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '분석 작업 상태' })).not.toBeInTheDocument()
   })
 })

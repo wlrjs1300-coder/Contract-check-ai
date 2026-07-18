@@ -4,6 +4,7 @@ import { formatFileSize } from '../utils/documentUpload'
 type DocumentUploadFormProps = Readonly<{
   selectedFile: File | null
   isUploading: boolean
+  isDisabled?: boolean
   onFileChange: (file: File | null) => void
   onSubmit: () => void
 }>
@@ -11,6 +12,7 @@ type DocumentUploadFormProps = Readonly<{
 export function DocumentUploadForm({
   selectedFile,
   isUploading,
+  isDisabled = false,
   onFileChange,
   onSubmit,
 }: DocumentUploadFormProps) {
@@ -39,7 +41,7 @@ export function DocumentUploadForm({
             className="form-control"
             type="file"
             accept=".txt,text/plain"
-            disabled={isUploading}
+            disabled={isUploading || isDisabled}
             onChange={(event) =>
               onFileChange(event.currentTarget.files?.[0] ?? null)
             }
@@ -61,7 +63,7 @@ export function DocumentUploadForm({
           <button
             type="submit"
             className="btn btn-primary mt-4"
-            disabled={isUploading}
+            disabled={isUploading || isDisabled}
           >
             {isUploading ? '업로드 중…' : '문서 업로드'}
           </button>
