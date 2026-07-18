@@ -5,26 +5,30 @@ type AnalysisJobPanelProps = Readonly<{
   canStart: boolean
   isCreating: boolean
   isRefreshing: boolean
+  isLoadingResults: boolean
   job: AnalysisJob | null
   requestError: string | null
   refreshError: string | null
   onStart: () => void
   onRefresh: () => void
+  onViewResults: () => void
 }>
 
 export function AnalysisJobPanel({
   canStart,
   isCreating,
   isRefreshing,
+  isLoadingResults,
   job,
   requestError,
   refreshError,
   onStart,
   onRefresh,
+  onViewResults,
 }: AnalysisJobPanelProps) {
   const canRefresh =
     job !== null && (job.status === 'queued' || job.status === 'processing')
-  const isBusy = isCreating || isRefreshing
+  const isBusy = isCreating || isRefreshing || isLoadingResults
   const canCreateJob = canStart && !canRefresh
 
   return (
@@ -38,8 +42,8 @@ export function AnalysisJobPanel({
           분석 작업 상태
         </h2>
         <p className="text-secondary">
-          현재 분석 작업은 화면과 API 흐름 검증을 위한 합성 처리입니다. 상세
-          결과 표시는 다음 단계에서 연결합니다.
+          현재 분석 작업과 결과는 화면과 API 흐름 검증을 위한 합성 처리입니다.
+          실제 외부 분석 품질이나 법률 판단을 의미하지 않습니다.
         </p>
 
         {!canStart && job === null && (
@@ -87,6 +91,16 @@ export function AnalysisJobPanel({
               onClick={onRefresh}
             >
               {isRefreshing ? '상태 확인 중…' : '상태 다시 확인'}
+            </button>
+          )}
+          {job?.status === 'completed' && (
+            <button
+              type="button"
+              className="btn btn-outline-primary"
+              disabled={isBusy}
+              onClick={onViewResults}
+            >
+              {isLoadingResults ? '결과 불러오는 중…' : '분석 결과 보기'}
             </button>
           )}
         </div>

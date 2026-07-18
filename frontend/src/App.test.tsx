@@ -50,6 +50,23 @@ function analysisJob(status: AnalysisJobStatus) {
   }
 }
 
+function analysisResults(displayLabel = '추가 확인', recommended = false) {
+  return {
+    document_id: successfulDocument.document_id,
+    job_id: 'job-test',
+    status: 'completed',
+    items: [
+      {
+        clause_id: 'clause-001',
+        reference_id: 'document-test:clause:1',
+        display_label: displayLabel,
+        summary: '합성 결과 <strong>강조하지 않음</strong>\n두 번째 줄',
+        expert_review_recommended: recommended,
+      },
+    ],
+  }
+}
+
 async function uploadSuccessfulDocument() {
   selectFile(new File(['제1조 합성 본문'], 'sample.txt'))
   fireEvent.click(screen.getByRole('button', { name: '문서 업로드' }))
@@ -73,7 +90,7 @@ describe('App', () => {
     expect(
       screen.getByRole('heading', { name: 'TXT 문서 업로드와 조항 확인' }),
     ).toBeInTheDocument()
-    expect(screen.getByText(/분석 결과는 아직 제공하지 않습니다/)).toBeInTheDocument()
+    expect(screen.getByText(/합성 분석 결과를 확인할 수 있습니다/)).toBeInTheDocument()
   })
 
   it('does not request an upload without a selected file', () => {
@@ -447,5 +464,114 @@ describe('analysis job flow', () => {
 
     expect(screen.queryByText('분석 작업이 완료되었습니다.')).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: '분석 작업 상태' })).not.toBeInTheDocument()
+  })
+})
+
+describe('analysis results flow', () => {
+  async function completeAnalysis(fetchMock: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+    await screen.findByText('분석 작업이 완료되었습니다.')
+  }
+
+  it('shows the result action only after completion and renders safe text', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+      .mockResolvedValueOnce(jsonResponse(analysisResults('위험', true)))
+    await completeAnalysis(fetchMock)
+
+    fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+    expect(await screen.findByRole('heading', { name: '분석 결과' })).toBeInTheDocument()
+    expect(screen.getByText('위험')).toBeInTheDocument()
+    expect(screen.getByText('합성 결과 <strong>강조하지 않음</strong>', { exact: false })).toBeInTheDocument()
+    expect(document.querySelector('strong')?.textContent).not.toBe('강조하지 않음')
+    expect(screen.getByText('전문가 검토를 권고합니다.')).toBeInTheDocument()
+    expect(screen.getAllByText('목적')).toHaveLength(2)
+    expect(screen.getAllByText('제1조').length).toBeGreaterThan(0)
+    expect(screen.queryByText('document-test')).not.toBeInTheDocument()
+    expect(screen.queryByText('hash-not-shown')).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'http://localhost:8000/documents/document-test/analysis-results',
+      { method: 'GET' },
+    )
+  })
+
+  it.each(['안전', '주의', '위험', '추가 확인'])(
+    'renders the original %s label',
+    async (label) => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(successfulDocument))
+        .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+        .mockResolvedValueOnce(jsonResponse(analysisResults(label)))
+      await completeAnalysis(fetchMock)
+      fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+      expect(await screen.findByText(label)).toBeInTheDocument()
+      expect(await screen.findByText('별도 권고가 표시되지 않았습니다.')).toBeInTheDocument()
+      expect(screen.queryByText(/검토 불필요/)).not.toBeInTheDocument()
+    },
+  )
+
+  it('blocks duplicate and conflicting actions while loading results', async () => {
+    let resolveResults: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveResults = resolve }))
+    await completeAnalysis(fetchMock)
+    fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+
+    const loadingButton = screen.getByRole('button', { name: '결과 불러오는 중…' })
+    expect(loadingButton).toBeDisabled()
+    expect(screen.getByLabelText('계약 문서')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '문서 업로드' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '분석 시작' })).toBeDisabled()
+    fireEvent.click(loadingButton)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    resolveResults?.(jsonResponse(analysisResults()))
+    await screen.findByText('별도 권고가 표시되지 않았습니다.')
+  })
+
+  it.each([
+    [jsonResponse({ detail: 'Analysis result not found.' }, 404), '저장된 분석 결과를 찾지 못했습니다.'],
+    [new Response('failure', { status: 500 }), '분석 결과를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'],
+    [jsonResponse({ ...analysisResults(), job_id: 'other' }), '분석 결과를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'],
+  ])('shows a safe result error', async (response, message) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+      .mockResolvedValueOnce(response)
+    await completeAnalysis(fetchMock)
+    fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(message)
+  })
+
+  it('shows linkage failure separately and clears results for a new file', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+      .mockResolvedValueOnce(jsonResponse({
+        ...analysisResults(),
+        items: [{ ...analysisResults().items[0], reference_id: 'other' }],
+      }))
+    await completeAnalysis(fetchMock)
+    fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('분석 결과와 문서 조항을 연결하지 못했습니다')
+
+    selectFile(new File(['제1조 새 합성 본문'], 'next.txt'))
+    expect(screen.queryByRole('heading', { name: '분석 결과' })).not.toBeInTheDocument()
+  })
+
+  it('shows network failure without an actual request', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse(analysisJob('completed')))
+      .mockRejectedValueOnce(new TypeError('unavailable'))
+    await completeAnalysis(fetchMock)
+    fireEvent.click(screen.getByRole('button', { name: '분석 결과 보기' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('서버에 연결하지 못했습니다')
   })
 })

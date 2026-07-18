@@ -175,12 +175,14 @@ frontend/
 └── src/
     ├── api/
     │   ├── analysisJobs.ts
+    │   ├── analysisResults.ts
     │   ├── config.ts
     │   ├── documents.ts
     │   └── http.ts
     ├── assets/
     ├── components/
     │   ├── AnalysisJobPanel.tsx
+    │   ├── AnalysisResultsPanel.tsx
     │   ├── ClauseList.tsx
     │   ├── DocumentSummary.tsx
     │   ├── DocumentUploadForm.tsx
@@ -192,9 +194,11 @@ frontend/
     ├── hooks/
     ├── types/
     │   ├── analysisJobs.ts
+    │   ├── analysisResults.ts
     │   └── documents.ts
     ├── utils/
     │   ├── analysisJob.ts
+    │   ├── analysisResult.ts
     │   └── documentUpload.ts
     └── styles/
 ```
