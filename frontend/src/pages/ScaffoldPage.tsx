@@ -2,17 +2,15 @@ import { useState } from 'react'
 import { createAnalysisJob, getAnalysisJob } from '../api/analysisJobs'
 import { getAnalysisResults } from '../api/analysisResults'
 import { uploadDocument } from '../api/documents'
-import { AnalysisJobPanel } from '../components/AnalysisJobPanel'
-import { AnalysisResultsPanel } from '../components/AnalysisResultsPanel'
-import { ClauseList } from '../components/ClauseList'
-import { DocumentSummary } from '../components/DocumentSummary'
-import { DocumentUploadForm } from '../components/DocumentUploadForm'
-import { UnclassifiedSections } from '../components/UnclassifiedSections'
+import { AppFrame } from '../components/AppFrame'
+import type { AppPage } from '../components/TopNavigation'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
-import brandMark from '../assets/brand-mark.svg'
 import type { UploadedDocument } from '../types/documents'
 import type { AnalysisJob } from '../types/analysisJobs'
 import type { LinkedAnalysisResult } from '../utils/analysisResult'
+import { AnalyzePage } from './AnalyzePage'
+import { HomePage } from './HomePage'
+import { ResultsPage } from './ResultsPage'
 import {
   ANALYSIS_LINK_ERROR_MESSAGE,
   getAnalysisResultsErrorMessage,
@@ -22,15 +20,13 @@ import {
   getAnalysisRefreshErrorMessage,
   getAnalysisRequestErrorMessage,
 } from '../utils/analysisJob'
-import {
-  getUploadErrorMessage,
-  validateUploadFile,
-} from '../utils/documentUpload'
+import { getUploadErrorMessage, validateUploadFile } from '../utils/documentUpload'
 
 type UploadStatus = 'idle' | 'selected' | 'uploading' | 'success' | 'error'
 
 export function ScaffoldPage() {
   useDocumentTitle('ContractCheck AI')
+  const [page, setPage] = useState<AppPage>('home')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [status, setStatus] = useState<UploadStatus>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -61,6 +57,7 @@ export function ScaffoldPage() {
   }
 
   function handleFileChange(file: File | null) {
+    setPage('analyze')
     setSelectedFile(file)
     setStatus(file ? 'selected' : 'idle')
     setErrorMessage(null)
@@ -69,28 +66,19 @@ export function ScaffoldPage() {
   }
 
   async function handleUpload() {
-    if (status === 'uploading' || isAnalysisBusy) {
-      return
-    }
-
+    if (status === 'uploading' || isAnalysisBusy) return
     const file = selectedFile
     const validationMessage = validateUploadFile(file)
-
     if (validationMessage) {
       setStatus('error')
       setErrorMessage(validationMessage)
       return
     }
-
-    if (file === null) {
-      return
-    }
-
+    if (file === null) return
     setStatus('uploading')
     setErrorMessage(null)
     setDocument(null)
     resetAnalysisState()
-
     try {
       const uploadedDocument = await uploadDocument(file)
       setDocument(uploadedDocument)
@@ -103,21 +91,12 @@ export function ScaffoldPage() {
   }
 
   async function handleAnalysisStart() {
-    if (
-      document === null ||
-      document.document_id.trim().length === 0 ||
-      document.clauses.length === 0 ||
-      isAnalysisBusy
-    ) {
-      return
-    }
-
+    if (document === null || document.document_id.trim().length === 0 || document.clauses.length === 0 || isAnalysisBusy) return
     setIsCreatingAnalysis(true)
     setAnalysisJob(null)
     setAnalysisRequestError(null)
     setAnalysisRefreshError(null)
     resetResultsState()
-
     try {
       const job = await createAnalysisJob(document.document_id)
       setAnalysisJob(job)
@@ -130,23 +109,11 @@ export function ScaffoldPage() {
   }
 
   async function handleAnalysisRefresh() {
-    if (
-      document === null ||
-      analysisJob === null ||
-      !['queued', 'processing'].includes(analysisJob.status) ||
-      isAnalysisBusy
-    ) {
-      return
-    }
-
+    if (document === null || analysisJob === null || !['queued', 'processing'].includes(analysisJob.status) || isAnalysisBusy) return
     setIsRefreshingAnalysis(true)
     setAnalysisRefreshError(null)
-
     try {
-      const job = await getAnalysisJob(
-        analysisJob.job_id,
-        document.document_id,
-      )
+      const job = await getAnalysisJob(analysisJob.job_id, document.document_id)
       setAnalysisJob(job)
       if (job.status !== 'completed') resetResultsState()
     } catch (error) {
@@ -157,25 +124,17 @@ export function ScaffoldPage() {
   }
 
   async function handleViewResults() {
-    if (
-      document === null ||
-      analysisJob?.status !== 'completed' ||
-      isAnalysisBusy
-    ) return
-
+    if (document === null || analysisJob?.status !== 'completed' || isAnalysisBusy) return
     setIsLoadingResults(true)
     setAnalysisResults(null)
     setAnalysisResultsError(null)
     try {
-      const response = await getAnalysisResults(
-        document.document_id,
-        analysisJob.job_id,
-      )
-      if (response.status !== 'completed') {
-        throw new Error('Results are not completed.')
-      }
+      const response = await getAnalysisResults(document.document_id, analysisJob.job_id)
+      if (response.status !== 'completed') throw new Error('Results are not completed.')
       try {
-        setAnalysisResults(linkAnalysisResults(document.clauses, response.items))
+        const linkedResults = linkAnalysisResults(document.clauses, response.items)
+        setAnalysisResults(linkedResults)
+        setPage('results')
       } catch {
         setAnalysisResultsError(ANALYSIS_LINK_ERROR_MESSAGE)
       }
@@ -187,73 +146,32 @@ export function ScaffoldPage() {
   }
 
   return (
-    <main className="container py-4 py-md-5">
-      <header className="mb-4">
-        <div className="d-flex align-items-center gap-3 mb-3">
-          <img src={brandMark} width="48" height="48" alt="" />
-          <p className="text-uppercase text-primary fw-semibold mb-0">
-            ContractCheck AI
-          </p>
-        </div>
-        <h1 className="display-6 fw-bold">TXT 문서 업로드와 조항 확인</h1>
-        <p className="lead text-secondary mb-0">
-          현재 기술 검증 단계에서는 UTF-8 TXT 파일 한 개를 최대 1MB까지
-          업로드하고 분리된 조항과 합성 분석 결과를 확인할 수 있습니다.
-        </p>
-        <p className="text-secondary mt-2 mb-0">
-          합성 Provider를 사용하는 화면·API 흐름 검증용 서비스이며 법률
-          자문이나 최종 판단을 제공하지 않습니다.
-        </p>
-      </header>
-
-      <DocumentUploadForm
-        selectedFile={selectedFile}
-        isUploading={status === 'uploading'}
-        isDisabled={isAnalysisBusy}
-        onFileChange={handleFileChange}
-        onSubmit={handleUpload}
-      />
-
-      <div className="mt-3">
-        {status === 'uploading' && (
-          <p className="alert alert-info mb-0" role="status">
-            문서를 업로드하고 있습니다.
-          </p>
-        )}
-        {errorMessage && (
-          <p className="alert alert-danger mb-0" role="alert">
-            {errorMessage}
-          </p>
-        )}
-      </div>
-
-      {document && (
-        <div className="results-layout mt-4">
-          <DocumentSummary document={document} />
-          <AnalysisJobPanel
-            canStart={
-              document.document_id.trim().length > 0 &&
-              document.clauses.length > 0
-            }
-            isCreating={isCreatingAnalysis}
-            isRefreshing={isRefreshingAnalysis}
-            isLoadingResults={isLoadingResults}
-            job={analysisJob}
-            requestError={analysisRequestError}
-            refreshError={analysisRefreshError}
-            onStart={handleAnalysisStart}
-            onRefresh={handleAnalysisRefresh}
-            onViewResults={handleViewResults}
-          />
-          <AnalysisResultsPanel
-            isLoading={isLoadingResults}
-            results={analysisResults}
-            error={analysisResultsError}
-          />
-          <UnclassifiedSections sections={document.unclassified_sections} />
-          <ClauseList clauses={document.clauses} />
-        </div>
+    <AppFrame currentPage={page} onNavigate={setPage}>
+      {page === 'home' && <HomePage onNavigate={setPage} />}
+      {page === 'analyze' && (
+        <AnalyzePage
+          selectedFile={selectedFile}
+          uploadStatus={status}
+          uploadError={errorMessage}
+          document={document}
+          job={analysisJob}
+          isCreating={isCreatingAnalysis}
+          isRefreshing={isRefreshingAnalysis}
+          isLoadingResults={isLoadingResults}
+          requestError={analysisRequestError}
+          refreshError={analysisRefreshError}
+          resultsError={analysisResultsError}
+          hasResults={analysisResults !== null}
+          onFileChange={handleFileChange}
+          onUpload={handleUpload}
+          onStart={handleAnalysisStart}
+          onRefresh={handleAnalysisRefresh}
+          onViewResults={handleViewResults}
+        />
       )}
-    </main>
+      {page === 'results' && (
+        <ResultsPage document={document} results={analysisResults} error={analysisResultsError} onNavigate={setPage} />
+      )}
+    </AppFrame>
   )
 }

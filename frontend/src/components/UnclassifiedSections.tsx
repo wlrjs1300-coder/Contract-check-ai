@@ -8,8 +8,8 @@ export function UnclassifiedSections({ sections }: UnclassifiedSectionsProps) {
   }
 
   return (
-    <section className="card border-0 shadow-sm" aria-labelledby="unclassified-title">
-      <div className="card-body p-4">
+    <section className="card" aria-labelledby="unclassified-title">
+      <div className="card-body">
         <h2 id="unclassified-title" className="h4">
           미분류 영역
         </h2>

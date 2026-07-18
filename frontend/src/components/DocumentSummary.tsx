@@ -8,8 +8,8 @@ type DocumentSummaryProps = Readonly<{
 
 export function DocumentSummary({ document }: DocumentSummaryProps) {
   return (
-    <section className="card border-0 shadow-sm" aria-labelledby="summary-title">
-      <div className="card-body p-4">
+    <section className="card" aria-labelledby="summary-title">
+      <div className="card-body">
         <h2 id="summary-title" className="h4">
           업로드 결과
         </h2>
