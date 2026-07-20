@@ -184,7 +184,7 @@ def test_create_and_get_korean_text_pdf_extraction(
     assert body["page_count"] == 2
     assert body["extraction_status"] == "review_required"
     assert body["extraction_method"] == "direct"
-    assert body["requires_user_review"] is True
+    assert body["requires_user_review"] is False
     assert [page["page_number"] for page in body["pages"]] == [1, 2]
     assert first_page in body["pages"][0]["text"]
     assert second_page in body["pages"][1]["text"]

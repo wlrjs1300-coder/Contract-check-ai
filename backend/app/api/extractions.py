@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import UTC, datetime
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -14,8 +24,12 @@ from backend.app.db.database import get_db
 from backend.app.db.models import Extraction, ExtractionPage
 from backend.app.schemas.extractions import (
     ExtractionErrorResponse,
+    ExtractionReviewPageResponse,
+    ExtractionReviewResponse,
     ExtractionPageResponse,
     ExtractionResponse,
+    ExtractionConfirmationResponse,
+    PageReviewPatchRequest,
 )
 from backend.app.services.image_ocr import (
     MAX_IMAGE_COUNT,
@@ -57,6 +71,11 @@ from backend.app.services.pdf_extraction import (
     PdfRenderRequest,
     extract_text_pdf,
 )
+
+
+MAX_PAGE_REVIEW_TEXT = 200_000
+MAX_DOCUMENT_REVIEW_TEXT = 1_000_000
+
 
 
 router = APIRouter(prefix="/extractions", tags=["extractions"])
@@ -103,9 +122,116 @@ def _safe_filename_display(filename: str) -> str:
     return (sanitized or "document.pdf")[:255]
 
 
+def _to_iso_timestamp(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC).isoformat()
+
+
+def _stable_checksum(values: list[str]) -> str:
+    hasher = hashlib.sha256()
+    for value in values:
+        hasher.update(value.encode("utf-8"))
+        hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
+def _extract_review_data(
+    extraction: Extraction,
+) -> dict[str, object]:
+    extraction_data = extraction.extra_data or {}
+    return {
+        "review_status": extraction_data.get("review_status", "pending"),
+        "review_version": extraction_data.get("review_version", 1),
+        "can_confirm": extraction_data.get("can_confirm", False),
+        "blocking_reasons": list(extraction_data.get("blocking_reasons", [])),
+        "confirmed_at": extraction_data.get("confirmed_at"),
+    }
+
+
+def _extract_page_review_data(
+    page: ExtractionPage,
+) -> dict[str, object]:
+    page_data = page.extra_data or {}
+    return {
+        "review_status": page_data.get("review_status", "pending"),
+        "review_version": page_data.get("review_version", 1),
+        "reviewed_text": page_data.get("reviewed_text"),
+        "text_changed": bool(page_data.get("text_changed", False)),
+        "reviewed_at": page_data.get("reviewed_at"),
+        "confirmed_at": page_data.get("confirmed_at"),
+        "final_text": page_data.get("final_text"),
+        "final_text_preview": (page_data.get("final_text") or page.text)[:80],
+    }
+
+
+def _build_review_summary(
+    extraction: Extraction,
+) -> dict[str, int | bool | list[str] | str]:
+    pages = extraction.pages
+    required_pages = 0
+    reviewed = 0
+    edited = 0
+    failed = 0
+    blocked = False
+    blocking_reasons: list[str] = []
+
+    for page in pages:
+        page_review_data = _extract_page_review_data(page)
+        is_required = page.requires_user_review
+        page_status = page_review_data["review_status"]
+        if page_data := page.extra_data:
+            if page_data.get("analysis_blocked") is True:
+                blocked = True
+                blocked_reason = page_data.get("failure")
+                if blocked_reason and blocked_reason not in blocking_reasons:
+                    blocking_reasons.append(blocked_reason)
+        if is_required:
+            required_pages += 1
+            if page_status in {"reviewed", "edited"}:
+                reviewed += 1
+            elif page_status == "pending":
+                pass
+        if page_status == "edited":
+            edited += 1
+        if (page_data or {}).get("failure"):
+            failed += 1
+
+    if required_pages == 0:
+        extraction_review_status = "not_required"
+    elif extraction.requires_user_review and failed > 0:
+        if "extraction_has_failed_pages" not in blocking_reasons:
+            blocking_reasons.append("extraction_has_failed_pages")
+
+    if extraction.status == "confirmed":
+        extraction_review_status = "confirmed"
+    elif required_pages == 0:
+        extraction_review_status = "not_required"
+    elif reviewed == 0:
+        extraction_review_status = "pending"
+    elif reviewed < required_pages:
+        extraction_review_status = "partially_reviewed"
+    else:
+        extraction_review_status = "ready_to_confirm"
+
+    return {
+        "required_pages": required_pages,
+        "reviewed_pages": reviewed,
+        "edited_pages": edited,
+        "failed_pages": failed,
+        "blocked": blocked,
+        "blocking_reasons": blocking_reasons,
+        "extraction_review_status": extraction_review_status,
+    }
+
+
 def _serialize_extraction(extraction: Extraction) -> ExtractionResponse:
     pages = sorted(extraction.pages, key=lambda page: page.page_number)
     extraction_data = extraction.extra_data or {}
+    summary = _build_review_summary(extraction)
+    extraction_review_status = summary["extraction_review_status"]
+    review_metadata = _extract_review_data(extraction)
+
     return ExtractionResponse(
         extraction_id=extraction.id,
         filename_display=extraction.filename_display,
@@ -139,6 +265,12 @@ def _serialize_extraction(extraction: Extraction) -> ExtractionResponse:
                     "analysis_blocked",
                     True,
                 ),
+                review_status=_extract_page_review_data(page)["review_status"],
+                review_version=_extract_page_review_data(page)["review_version"],
+                reviewed_text=_extract_page_review_data(page)["reviewed_text"],
+                text_changed=_extract_page_review_data(page)["text_changed"],
+                reviewed_at=_extract_page_review_data(page)["reviewed_at"],
+                final_text_preview=_extract_page_review_data(page)["final_text_preview"],
                 failure=(page.extra_data or {}).get("failure"),
             )
             for page in pages
@@ -147,9 +279,80 @@ def _serialize_extraction(extraction: Extraction) -> ExtractionResponse:
         requires_user_review=extraction.requires_user_review,
         review_required=extraction.requires_user_review,
         analysis_blocked=extraction_data.get("analysis_blocked", True),
+        review_status=extraction_review_status,
+        review_version=review_metadata["review_version"],
+        can_confirm=review_metadata["can_confirm"],
+        reviewed_pages=summary["reviewed_pages"],
+        edited_pages=summary["edited_pages"],
+        required_review_pages=summary["required_pages"],
+        blocking_reasons=summary["blocking_reasons"],
+        confirmed_at=review_metadata["confirmed_at"],
+        final_text_length=extraction_data.get(
+            "final_total_text_length",
+            extraction_data.get("total_text_length", 0),
+        ),
         created_at=extraction.created_at,
         updated_at=extraction.created_at,
     )
+
+
+def _get_extraction_with_pages(
+    extraction_id: str,
+    db: Session,
+) -> Extraction:
+    statement = (
+        select(Extraction)
+        .options(selectinload(Extraction.pages))
+        .where(Extraction.id == extraction_id)
+    )
+    extraction = db.scalar(statement)
+
+    if extraction is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "extraction_not_found",
+                "The extraction was not found.",
+            ),
+        )
+
+    return extraction
+
+
+def _parse_version_value(
+    if_match: str | None,
+    payload_version: int | None,
+    *,
+    fallback_error_code: str = "invalid_if_match",
+) -> int:
+    if payload_version is not None:
+        return payload_version
+
+    if if_match is None:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                fallback_error_code,
+                "A matching version is required.",
+            ),
+        )
+
+    version_token = if_match.strip()
+    if version_token.startswith("W/"):
+        version_token = version_token[2:]
+    if version_token.startswith('"') and version_token.endswith('"'):
+        version_token = version_token[1:-1]
+
+    try:
+        return int(version_token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                fallback_error_code,
+                "The version header could not be parsed.",
+            ),
+        ) from exc
 
 
 def get_ocr_adapter() -> OcrAdapter:
@@ -505,6 +708,7 @@ async def create_extraction(
     extraction_method = "direct"
     if extraction_summary.get("ocr_pages", 0) > 0:
         extraction_method = "ocr" if extraction_summary.get("direct_pages") == 0 else "mixed"
+    requires_user_review = extraction_summary.get("review_required_pages", 0) > 0
 
     extraction = Extraction(
         id=str(uuid4()),
@@ -515,11 +719,22 @@ async def create_extraction(
         status="review_required",
         method=extraction_method,
         warnings=list(extracted_pdf.warnings),
-        requires_user_review=True,
+        requires_user_review=requires_user_review,
         extra_data={
             **extraction_summary,
-            "analysis_blocked": True,
-            "review_required": True,
+            "analysis_blocked": requires_user_review or extraction_summary.get(
+                "failed_pages",
+                0,
+            )
+            > 0,
+            "review_required": requires_user_review,
+            "review_status": "confirmed" if not requires_user_review else "pending",
+            "review_version": 1,
+            "can_confirm": (
+                extraction_summary.get("failed_pages", 0) == 0
+                and requires_user_review is False
+            ),
+            "blocking_reasons": [],
         },
     )
     extraction.pages.extend(
@@ -538,6 +753,15 @@ async def create_extraction(
                 "failure": page["failure"],
                 "blocks": page["blocks"],
                 "classification": page["classification"],
+                "review_status": "not_required"
+                if not page["requires_user_review"]
+                else "pending",
+                "review_version": 1,
+                "reviewed_text": None,
+                "text_changed": False,
+                "reviewed_at": None,
+                "confirmed_at": None,
+                "final_text": None,
             },
         )
         for page in processed_pages
@@ -701,6 +925,14 @@ async def create_image_extraction(
             "failed_pages": 0,
             "total_text_length": extracted_images.total_text_length,
             "analysis_blocked": extracted_images.analysis_blocked,
+            "review_required": extracted_images.review_required,
+            "review_status": "pending" if extracted_images.review_required else "not_required",
+            "review_version": 1,
+            "can_confirm": (
+                extracted_images.review_required is False
+                and extracted_images.analysis_blocked is False
+            ),
+            "blocking_reasons": [],
         },
     )
     extraction.pages.extend(
@@ -731,6 +963,15 @@ async def create_image_extraction(
                     }
                     for block in page.blocks
                 ],
+                "review_status": "not_required"
+                if not page.review_required
+                else "pending",
+                "review_version": 1,
+                "reviewed_text": None,
+                "text_changed": False,
+                "reviewed_at": None,
+                "confirmed_at": None,
+                "final_text": None,
             },
         )
         for page in extracted_images.pages
@@ -750,20 +991,549 @@ def get_extraction(
     extraction_id: str,
     db: Session = Depends(get_db),
 ) -> ExtractionResponse:
-    statement = (
-        select(Extraction)
-        .options(selectinload(Extraction.pages))
-        .where(Extraction.id == extraction_id)
-    )
-    extraction = db.scalar(statement)
+    extraction = _get_extraction_with_pages(extraction_id, db)
+    return _serialize_extraction(extraction)
 
-    if extraction is None:
+
+@router.get(
+    "/{extraction_id}/review",
+    response_model=ExtractionReviewResponse,
+    responses=ERROR_RESPONSES,
+)
+def get_extraction_review(
+    extraction_id: str,
+    db: Session = Depends(get_db),
+) -> ExtractionReviewResponse:
+    extraction = _get_extraction_with_pages(extraction_id, db)
+    summary = _build_review_summary(extraction)
+    extraction_data = extraction.extra_data or {}
+
+    review_pages: list[ExtractionReviewPageResponse] = []
+    for page in sorted(extraction.pages, key=lambda item: item.page_number):
+        page_data = _extract_page_review_data(page)
+        page_extra = page.extra_data or {}
+        review_pages.append(
+            ExtractionReviewPageResponse(
+                page_id=str(page_extra.get("page_id", page.page_number)),
+                page_number=page.page_number,
+                method=page.method,
+                classification=page_extra.get("classification"),
+                original_text=page.text,
+                reviewed_text=page_data["reviewed_text"],
+                final_text_preview=page_data["final_text_preview"],
+                text_changed=bool(page_data["text_changed"]),
+                review_status=page_data["review_status"],
+                review_version=page_data["review_version"],
+                reviewed_at=page_data["reviewed_at"],
+                confirmed_at=page_data["confirmed_at"],
+                warnings=page.warnings,
+                blocks=page_extra.get("blocks", []),
+                failure=page_extra.get("failure"),
+                analysis_blocked=bool(page_extra.get("analysis_blocked", True)),
+            )
+        )
+
+    return ExtractionReviewResponse(
+        extraction_id=extraction.id,
+        review_status=summary["extraction_review_status"],
+        review_version=int(extraction_data.get("review_version", 1)),
+        review_required=extraction.requires_user_review,
+        can_confirm=_build_can_confirm(extraction, summary),
+        review_completed=summary["extraction_review_status"] in {
+            "ready_to_confirm",
+            "confirmed",
+        },
+        total_pages=len(extraction.pages),
+        required_review_pages=summary["required_pages"],
+        reviewed_pages=summary["reviewed_pages"],
+        edited_pages=summary["edited_pages"],
+        failed_pages=summary["failed_pages"],
+        blocked=summary["blocked"],
+        blocking_reasons=summary["blocking_reasons"],
+        pages=review_pages,
+    )
+
+
+def _build_can_confirm(
+    extraction: Extraction,
+    summary: dict[str, int | bool | list[str] | str],
+) -> bool:
+    required_pages = int(summary["required_pages"])
+    reviewed_pages = int(summary["reviewed_pages"])
+    failed_pages = int(summary["failed_pages"])
+    return (
+        extraction.requires_user_review is False
+        and failed_pages == 0
+        or (
+            required_pages == reviewed_pages
+            and failed_pages == 0
+            and not _extraction_review_stale(extraction)
+        )
+    )
+
+
+def _extraction_review_stale(extraction: Extraction) -> bool:
+    # Keep behavior strict if any required page still pending/blocked.
+    pages = _build_review_summary(extraction)
+    return pages["extraction_review_status"] in {"pending", "partially_reviewed"}
+
+
+def _validate_review_text(text: str, *, field_name: str = "reviewed_text") -> None:
+    if "\x00" in text:
         raise HTTPException(
-            status_code=404,
+            status_code=400,
             detail=_error_detail(
-                "extraction_not_found",
-                "The extraction was not found.",
+                "invalid_review_text",
+                f"The {field_name} must not contain null bytes.",
             ),
         )
 
-    return _serialize_extraction(extraction)
+    if len(text) > MAX_PAGE_REVIEW_TEXT:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                f"The {field_name} exceeds maximum allowed length.",
+            ),
+        )
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                "The review text cannot be empty.",
+            ),
+        )
+
+
+def _build_confirmation_snapshot(
+    extraction: Extraction,
+) -> tuple[list[dict[str, object]], int, int, int]:
+    pages = sorted(extraction.pages, key=lambda page: page.page_number)
+    if not pages:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_review_incomplete",
+                "No pages are available for confirmation.",
+            ),
+        )
+
+    expected = list(range(1, len(pages) + 1))
+    page_numbers = [page.page_number for page in pages]
+    if sorted(page_numbers) != expected:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_review_incomplete",
+                "Page order is invalid for confirmation.",
+            ),
+        )
+
+    page_ids = [str((page.extra_data or {}).get("page_id", page.page_number)) for page in pages]
+    if len(set(page_ids)) != len(page_ids):
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_review_incomplete",
+                "Duplicate page identifiers were found.",
+            ),
+        )
+
+    snapshot: list[dict[str, object]] = []
+    reviewed_count = 0
+    edited_count = 0
+    confirmed_pages = 0
+    for page in pages:
+        page_data = page.extra_data or {}
+        review_status = page_data.get("review_status", "pending")
+        page_requires_review = bool(page.requires_user_review)
+        failure = page_data.get("failure")
+        if failure:
+            raise HTTPException(
+                status_code=409,
+                detail=_error_detail(
+                    "extraction_has_failed_pages",
+                    "Extraction cannot be confirmed because one or more pages failed.",
+                ),
+            )
+
+        if page_requires_review and review_status not in {"reviewed", "edited"}:
+            raise HTTPException(
+                status_code=409,
+                detail=_error_detail(
+                    "extraction_review_incomplete",
+                    "Not all required pages have been reviewed.",
+                ),
+            )
+
+        final_text = (
+            page_data.get("reviewed_text")
+            if review_status == "edited"
+            else page.text
+        )
+        if final_text is None or not str(final_text).strip():
+            raise HTTPException(
+                status_code=409,
+                detail=_error_detail(
+                    "invalid_review_text",
+                    "All final page texts must be non-empty.",
+                ),
+            )
+
+        final_text = str(final_text)
+        if len(final_text) > MAX_PAGE_REVIEW_TEXT:
+            raise HTTPException(
+                status_code=400,
+                detail=_error_detail(
+                    "invalid_review_text",
+                    "Final confirmed text exceeds page limit.",
+                ),
+            )
+
+        is_changed = bool(page_data.get("text_changed", False))
+        if is_changed:
+            edited_count += 1
+        if page_requires_review:
+            reviewed_count += 1
+
+        snapshot.append(
+            {
+                "page_id": str((page_data.get("page_id", page.page_number))),
+                "page_number": page.page_number,
+                "final_text": final_text,
+                "text_source": "edited" if is_changed else "original",
+                "text_changed": is_changed,
+                "method": page.method,
+                "warnings": page.warnings,
+                "blocks": (page_data.get("blocks") or []),
+            }
+        )
+        confirmed_pages += 1
+
+    if any(len(item["final_text"]) > MAX_PAGE_REVIEW_TEXT for item in snapshot):
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                "The confirmed text exceeds allowed per-page limit.",
+            ),
+        )
+
+    total_text_length = sum(len(item["final_text"]) for item in snapshot)
+    if total_text_length > MAX_DOCUMENT_REVIEW_TEXT:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                "The confirmed document text exceeds total length limit.",
+            ),
+        )
+
+    return snapshot, confirmed_pages, reviewed_count, edited_count
+
+
+@router.patch(
+    "/{extraction_id}/pages/{page_id}/review",
+    response_model=ExtractionReviewPageResponse,
+    responses=ERROR_RESPONSES,
+)
+def patch_extraction_page_review(
+    extraction_id: str,
+    page_id: str,
+    payload: PageReviewPatchRequest,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> ExtractionReviewPageResponse:
+    extraction = _get_extraction_with_pages(extraction_id, db)
+    if extraction.status == "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_already_confirmed",
+                "The extraction has already been confirmed.",
+            ),
+        )
+    if not extraction.requires_user_review:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_not_reviewable",
+                "The extraction does not require review.",
+            ),
+        )
+
+    candidate_pages = [
+        page for page in extraction.pages if page.extra_data.get("page_id") == page_id
+    ]
+    if not candidate_pages:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "page_not_found",
+                "The extraction page was not found.",
+            ),
+        )
+
+    page = candidate_pages[0]
+    page_data = page.extra_data or {}
+    if not page.requires_user_review:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "page_not_reviewable",
+                "The page does not require manual review.",
+            ),
+        )
+
+    request_version = _parse_version_value(
+        if_match=if_match,
+        payload_version=payload.version,
+        fallback_error_code="page_review_version_mismatch",
+    )
+    current_version = int(page_data.get("review_version", 1))
+    if request_version != current_version:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "page_review_conflict",
+                "The page review version is stale.",
+            ),
+        )
+
+    page_status = page_data.get("review_status", "pending")
+    if page_status == "confirmed":
+        return ExtractionReviewPageResponse(
+            page_id=str(page_data.get("page_id", page_id)),
+            page_number=page.page_number,
+            method=page.method,
+            classification=page_data.get("classification"),
+            original_text=page.text,
+            reviewed_text=page_data.get("reviewed_text"),
+            final_text_preview=(
+                page_data.get("final_text") or page_data.get("reviewed_text")
+                or page.text
+            )[:80],
+            text_changed=bool(page_data.get("text_changed", False)),
+            review_status=page_status,
+            review_version=current_version,
+            reviewed_at=page_data.get("reviewed_at"),
+            confirmed_at=page_data.get("confirmed_at"),
+            warnings=page.warnings,
+            blocks=page_data.get("blocks", []),
+            failure=page_data.get("failure"),
+            analysis_blocked=bool(page_data.get("analysis_blocked", True)),
+        )
+
+    reviewed_text = payload.reviewed_text
+    unchanged = bool(payload.unchanged) if payload.unchanged is not None else False
+
+    if not unchanged and reviewed_text is None:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                "A review text is required unless unchanged is set.",
+            ),
+        )
+
+    if unchanged:
+        reviewed_text = page.text
+
+    if page_data.get("failure"):
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "page_not_reviewable",
+                "The page cannot be edited after failure.",
+            ),
+        )
+
+    _validate_review_text(reviewed_text)
+
+    text_changed = reviewed_text != page.text
+    final_text = reviewed_text
+
+    new_version = current_version + 1
+    page_data = {
+        **page_data,
+        "reviewed_text": reviewed_text,
+        "text_changed": text_changed,
+        "reviewed_at": _to_iso_timestamp(datetime.now(UTC)),
+        "review_version": new_version,
+        "review_status": "edited" if text_changed else "reviewed",
+        "final_text": final_text,
+        "confirmed_at": None,
+    }
+
+    page.extra_data = page_data
+    extraction_metadata = extraction.extra_data or {}
+    extraction.extra_data = {
+        **extraction_metadata,
+        "review_version": int(extraction_metadata.get("review_version", 1)) + 1,
+    }
+
+    summary = _build_review_summary(extraction)
+    extraction.extra_data["can_confirm"] = _build_can_confirm(extraction, summary)
+    extraction.extra_data["blocking_reasons"] = summary["blocking_reasons"]
+    extraction.extra_data["review_status"] = summary["extraction_review_status"]
+
+    db.add(extraction)
+    db.commit()
+    db.refresh(extraction)
+
+    page_data = page.extra_data or {}
+    return ExtractionReviewPageResponse(
+        page_id=str(page_data.get("page_id", page_id)),
+        page_number=page.page_number,
+        method=page.method,
+        classification=page_data.get("classification"),
+        original_text=page.text,
+        reviewed_text=page_data.get("reviewed_text"),
+        final_text_preview=(page_data.get("final_text") or page.text)[:80],
+        text_changed=bool(page_data.get("text_changed", False)),
+        review_status=page_data.get("review_status", "pending"),
+        review_version=new_version,
+        reviewed_at=page_data.get("reviewed_at"),
+        confirmed_at=page_data.get("confirmed_at"),
+        warnings=page.warnings,
+        blocks=page_data.get("blocks", []),
+        failure=page_data.get("failure"),
+        analysis_blocked=bool(page_data.get("analysis_blocked", True)),
+    )
+
+
+@router.post(
+    "/{extraction_id}/confirmation",
+    response_model=ExtractionConfirmationResponse,
+    responses=ERROR_RESPONSES,
+)
+def confirm_extraction(
+    extraction_id: str,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    db: Session = Depends(get_db),
+) -> ExtractionConfirmationResponse:
+    extraction = _get_extraction_with_pages(extraction_id, db)
+    request_version = int(
+        extraction.extra_data.get("review_version", 1)
+        if extraction.extra_data is not None
+        else 1
+    )
+    header_version = _parse_version_value(
+        if_match=if_match,
+        payload_version=None,
+        fallback_error_code="extraction_confirmation_stale",
+    )
+    if header_version != request_version:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_confirmation_stale",
+                "The extraction review version is stale.",
+            ),
+        )
+
+    summary = _build_review_summary(extraction)
+    if summary["extraction_review_status"] == "confirmed":
+        page_snapshot = extraction.extra_data.get("confirmation_snapshot", [])
+        if summary["extraction_review_status"] == "confirmed" and page_snapshot:
+            return ExtractionConfirmationResponse(
+                extraction_id=extraction.id,
+                extraction_status=extraction.status,
+                review_status="confirmed",
+                review_version=request_version,
+                snapshot_version=int(extraction.extra_data.get("snapshot_version", 1)),
+                confirmed_at=extraction.extra_data["confirmed_at"],
+                total_pages=len(extraction.pages),
+                confirmed_pages=int(summary["required_pages"]),
+                changed_pages=int(summary["edited_pages"]),
+                total_text_length=extraction.extra_data.get(
+                    "final_total_text_length",
+                    0,
+                ),
+                confirmation_checksum=extraction.extra_data.get(
+                    "confirmation_checksum",
+                    "",
+                ),
+                snapshot=[
+                    {
+                        "page_id": item["page_id"],
+                        "page_number": item["page_number"],
+                        "final_text": item["final_text"],
+                        "text_source": item["text_source"],
+                        "text_changed": item["text_changed"],
+                        "method": item["method"],
+                        "warnings": item["warnings"],
+                    }
+                    for item in page_snapshot
+                ],
+            )
+
+    snapshot, confirmed_pages, reviewed_pages, changed_pages = _build_confirmation_snapshot(
+        extraction,
+    )
+
+    snapshot_timestamp = _to_iso_timestamp(datetime.now(UTC))
+    total_text_length = sum(len(item["final_text"]) for item in snapshot)
+    checksum = _stable_checksum([item["final_text"] for item in snapshot])
+
+    extraction_snapshot = extraction.extra_data.get("snapshot_version", 0)
+    snapshot_version = (
+        int(extraction_snapshot) + 1
+        if isinstance(extraction_snapshot, int)
+        else 1
+    )
+
+    for page in sorted(extraction.pages, key=lambda item: item.page_number):
+        page_data = page.extra_data or {}
+        page_data["review_status"] = "confirmed"
+        page_data["confirmed_at"] = snapshot_timestamp
+        if page_data.get("review_status") == "edited":
+            page_data["final_text"] = page_data.get("reviewed_text")
+        else:
+            page_data["final_text"] = page.text
+        page_data["review_version"] = int(page_data.get("review_version", 1)) + 1
+        page.extra_data = page_data
+
+    extraction.extra_data = {
+        **(extraction.extra_data or {}),
+        "review_status": "confirmed",
+        "confirmed_at": snapshot_timestamp,
+        "review_version": request_version + 1,
+        "confirmation_snapshot": snapshot,
+        "snapshot_version": snapshot_version,
+        "final_total_text_length": total_text_length,
+        "confirmation_checksum": checksum,
+        "can_confirm": False,
+    }
+    extraction.status = "confirmed"
+    db.add(extraction)
+    db.commit()
+    db.refresh(extraction)
+
+    return ExtractionConfirmationResponse(
+        extraction_id=extraction.id,
+        extraction_status=extraction.status,
+        review_status="confirmed",
+        review_version=int(extraction.extra_data.get("review_version", 1)),
+        snapshot_version=int(extraction.extra_data.get("snapshot_version", 1)),
+        confirmed_at=snapshot_timestamp,
+        total_pages=len(extraction.pages),
+        confirmed_pages=confirmed_pages,
+        changed_pages=changed_pages,
+        total_text_length=total_text_length,
+        confirmation_checksum=checksum,
+        snapshot=[
+            {
+                "page_id": item["page_id"],
+                "page_number": item["page_number"],
+                "final_text": item["final_text"],
+                "text_source": item["text_source"],
+                "text_changed": item["text_changed"],
+                "method": item["method"],
+                "warnings": item["warnings"],
+            }
+            for item in snapshot
+        ],
+    )
