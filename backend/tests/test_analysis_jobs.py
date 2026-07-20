@@ -1,5 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
+from io import BytesIO
 
 from backend.app.api import analysis_jobs as analysis_jobs_api
 from backend.app.services import analysis_pipeline
@@ -8,6 +10,67 @@ from backend.app.main import app
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def force_test_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+
+
+def _png_bytes() -> bytes:
+    image = Image.new("RGB", (1200, 1200), "white")
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _post_image_extraction() -> dict[str, object]:
+    response = client.post(
+        "/extractions/images",
+        files=[
+            ("files", ("page1.png", _png_bytes(), "image/png")),
+            ("files", ("page2.png", _png_bytes(), "image/png")),
+        ],
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def _confirm_image_extraction_with_edit() -> tuple[str, int, str]:
+    body = _post_image_extraction()
+    extraction_id = body["extraction_id"]
+
+    first_review = client.get(f"/extractions/{extraction_id}/review").json()
+    first_page_id = first_review["pages"][0]["page_id"]
+    first_version = first_review["pages"][0]["review_version"]
+    edited_text = "수정된 OCR 페이지 본문"
+    patch1 = client.patch(
+        f"/extractions/{extraction_id}/pages/{first_page_id}/review",
+        json={"reviewed_text": edited_text, "version": first_version},
+    )
+    assert patch1.status_code == 200
+
+    second_review = client.get(f"/extractions/{extraction_id}/review").json()
+    second_page_id = second_review["pages"][1]["page_id"]
+    second_version = second_review["pages"][1]["review_version"]
+    patch2 = client.patch(
+        f"/extractions/{extraction_id}/pages/{second_page_id}/review",
+        json={"unchanged": True, "version": second_version},
+    )
+    assert patch2.status_code == 200
+    latest_review = client.get(f"/extractions/{extraction_id}/review").json()
+
+    confirmation_response = client.post(
+        f"/extractions/{extraction_id}/confirmation",
+        headers={"If-Match": str(latest_review["review_version"])},
+    )
+    assert confirmation_response.status_code == 200
+    confirmation = confirmation_response.json()
+    return (
+        extraction_id,
+        confirmation["snapshot_version"],
+        edited_text,
+    )
 
 
 def test_create_analysis_job_and_get_results() -> None:
@@ -159,3 +222,66 @@ def test_failed_analysis_job_is_persisted(
         "document_id": document_id,
         "status": "failed",
     }
+
+
+def test_extraction_analysis_job_requires_confirmation(
+) -> None:
+    body = _post_image_extraction()
+    extraction_id = body["extraction_id"]
+
+    response = client.post(
+        f"/extractions/{extraction_id}/analysis-jobs",
+        headers={"If-Match": "1"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "confirmation_required"
+
+
+def test_extraction_analysis_job_rejects_stale_or_missing_if_match() -> None:
+    extraction_id, _, _ = _confirm_image_extraction_with_edit()
+
+    missing_if_match = client.post(f"/extractions/{extraction_id}/analysis-jobs")
+    assert missing_if_match.status_code == 400
+    assert missing_if_match.json()["detail"] == "If-Match header is required."
+
+    stale_response = client.post(
+        f"/extractions/{extraction_id}/analysis-jobs",
+        headers={"If-Match": "999"},
+    )
+    assert stale_response.status_code == 409
+    assert stale_response.json()["detail"] == "extraction revision mismatch"
+
+
+def test_extraction_analysis_job_uses_confirmed_snapshot_as_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extraction_id, review_version, edited_text = (
+        _confirm_image_extraction_with_edit()
+    )
+    captured_clauses: list[str] = []
+
+    def _fake_run_analysis_pipeline(*args, **kwargs) -> None:
+        clauses = kwargs.get("clauses") if "clauses" in kwargs else args[2]
+        captured_clauses.extend([clause.body for clause in clauses])
+
+        job = kwargs["job"]
+        db = kwargs["db"]
+        job.status = "completed"
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+    monkeypatch.setattr(
+        analysis_jobs_api,
+        "run_analysis_pipeline",
+        _fake_run_analysis_pipeline,
+    )
+
+    response = client.post(
+        f"/extractions/{extraction_id}/analysis-jobs",
+        headers={"If-Match": str(review_version)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert edited_text in captured_clauses
