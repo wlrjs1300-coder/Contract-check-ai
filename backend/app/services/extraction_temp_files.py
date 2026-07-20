@@ -96,8 +96,15 @@ def create_request_directory() -> RequestDirectory:
         raise RuntimeError("Temporary storage is unavailable.") from exc
 
 
-def create_server_file_path(request_directory: RequestDirectory) -> Path:
-    return request_directory.path / f"{uuid4()}.pdf"
+def create_server_file_path(
+    request_directory: RequestDirectory,
+    *,
+    suffix: str = ".pdf",
+) -> Path:
+    if not suffix.startswith(".") or not suffix[1:].isalnum():
+        raise ValueError("The server file suffix is invalid.")
+
+    return request_directory.path / f"{uuid4()}{suffix.lower()}"
 
 
 async def write_upload_to_temp(

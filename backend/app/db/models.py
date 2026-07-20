@@ -163,6 +163,10 @@ class Extraction(Base):
         Boolean,
         default=True,
     )
+    extra_data: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        default=dict,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -200,6 +204,10 @@ class ExtractionPage(Base):
     requires_user_review: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
+    )
+    extra_data: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        default=dict,
     )
 
     extraction: Mapped[Extraction] = relationship(back_populates="pages")
