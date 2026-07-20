@@ -162,6 +162,35 @@ docs/
 - `docs/portfolio/`는 포트폴리오 관점의 프로젝트 배경, 담당 범위, 의사결정과 검증 결과를 기록한다.
 - `docs/deployment/`는 특정 플랫폼을 확정하지 않고 실제 배포 전 필요한 조건과 미준비 항목을 기록한다.
 
+## 2.4 v0.6 문서 입력·OCR 설계 문서 구조
+
+v0.6 Phase 1의 입력 계약, 기술 결정, 보안 정책, API 계약과 구현 로드맵은 다음 경로에서 관리한다. 이 구조는 설계 문서가 실제 생성되었음을 뜻하며 PDF·이미지·OCR 기능이 구현되었음을 뜻하지 않는다.
+
+```text
+docs/
+├── architecture/
+│   └── v0.6-document-input-contract.md
+├── decisions/
+│   └── ADR-006-ocr-strategy.md
+├── api/
+│   └── v0.6-extraction-result-contract.md
+├── security/
+│   ├── v0.6-original-document-lifecycle.md
+│   └── v0.6-document-upload-threat-model.md
+├── roadmaps/
+│   └── v0.6-document-input-ocr-roadmap.md
+└── checklists/
+    └── v0.6/
+        └── v0.6.0-input-security-design.md
+```
+
+- `docs/architecture/`는 지원 입력, 처리 분기, 상태 전이와 분석 시작 조건을 기록한다.
+- `docs/decisions/`는 OCR 방식의 후보, 선택 기준, 스파이크와 교체 전략을 ADR로 기록한다.
+- `docs/api/`는 구현 전 공통 추출 결과와 오류 응답 계약을 기록한다.
+- `docs/security/`는 원본 파일 생명주기와 업로드·OCR 위협 모델을 기록한다.
+- `docs/roadmaps/`는 보안 게이트를 포함한 단계별 구현 순서를 기록한다.
+- `docs/checklists/v0.6/`는 v0.6 버전별 수행·검증 상태를 기록한다.
+
 ## 3. 향후 목표 구조
 
 아래 항목은 구현, 설계, 개발 환경 세팅 단계에서 필요할 때 생성할 목표 구조이다.
