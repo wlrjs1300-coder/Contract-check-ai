@@ -89,11 +89,13 @@ OCR은 개인정보가 포함된 원본 또는 파생 이미지에 접근하고 
 
 내부 OCR이 품질 또는 운영 자원 기준을 충족하지 못하면 혼합 방식을 다음 후보로 검토한다. 외부 OCR은 자동 fallback이 아니라 사용자에게 전송 대상, 목적, 처리자, 보존·삭제와 대안을 알리고 별도 동의를 받은 요청에만 허용한다.
 
-### v0.6.3 구현 상태
+### v0.6.6 구현 상태
 
-Phase 3 기반 구현은 Pillow 12.3.0(MIT-CMU)을 JPEG·PNG decoder와 EXIF·색상 정규화에 사용하고, engine 독립 `OcrAdapter`를 추가했다. 실제 OCR 엔진·native binary·한국어 언어팩은 선정하거나 설치하지 않았다. production 기본 adapter는 `ocr_unavailable`로 실패하며 test-only 합성 adapter는 `APP_ENV=test`가 아니면 생성할 수 없다.
+Phase 3 기반에서 정리된 `OcrAdapter` 구조를 유지하면서 v0.6.6에서 `LocalKoreanOcrAdapter`를 추가해 로컬 OCR 실행 경로를 연동했다.
 
-Pillow는 CPython 3.11 Windows wheel에서 재현했으며 Python 3.10 이상을 요구한다. Linux 배포 image의 wheel·system library·decoder 보안 업데이트와 실제 OCR engine의 Windows/Linux 설치·라이선스·한국어 품질은 후속 스파이크 대상이다. Thread timeout은 adapter 응답 대기를 제한할 뿐 실행 중 native OCR process를 강제 종료하지 않으므로 실제 engine 전에 process 격리가 필요하다.
+`OCR_ADAPTER` 설정이 `local`, `local_korean`, `tesseract`일 때만 로컬 OCR 경로가 활성화되며, 기본 동작은 non-test 환경에서 `ocr_unavailable`로 실패한다. 테스트 환경(`APP_ENV=test`)에서는 이전 정책대로 기본 동작은 synthetic 경로다.
+
+실행 가능한 기반은 Tesseract 의존성 기반이며, 품질 스파이크는 별도 평가셋에서 계속 수행한다. Engine/모델 누락 등은 명시 오류 코드로 구분된다. Thread timeout은 응답 대기 제어에 한정되므로 process 격리와 동시성 제한은 후속 보안/운영 과제다.
 
 ## External transfer conditions
 

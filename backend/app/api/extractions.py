@@ -43,6 +43,7 @@ from backend.app.services.image_ocr import (
     OcrAdapter,
     UnavailableOcrAdapter,
     SyntheticOcrAdapter,
+    LocalKoreanOcrAdapter,
     canonical_format_from_extension,
     extract_images,
     prepare_image,
@@ -356,8 +357,28 @@ def _parse_version_value(
 
 
 def get_ocr_adapter() -> OcrAdapter:
-    if os.getenv("APP_ENV") == "test":
+    app_env = (os.getenv("APP_ENV") or "production").lower().strip()
+    adapter_mode = (os.getenv("OCR_ADAPTER") or "").strip().lower()
+
+    if app_env == "test":
+        if adapter_mode in {"local", "local_korean", "tesseract"}:
+            return LocalKoreanOcrAdapter()
         return SyntheticOcrAdapter()
+
+    if app_env in {"production", "development"} and adapter_mode in {
+        "",
+        "local",
+        "local_korean",
+        "tesseract",
+    }:
+        try:
+            return LocalKoreanOcrAdapter()
+        except OcrFailure:
+            return UnavailableOcrAdapter()
+    if adapter_mode == "synthetic":
+        raise RuntimeError(
+            "Synthetic OCR adapter is test-only and cannot be used in non-test environment."
+        )
     return UnavailableOcrAdapter()
 
 
