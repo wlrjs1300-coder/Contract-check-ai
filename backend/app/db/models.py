@@ -146,3 +146,60 @@ class AnalysisResultItem(Base):
     clause: Mapped[Clause] = relationship(
         back_populates="analysis_result_items",
     )
+
+
+class Extraction(Base):
+    __tablename__ = "extractions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    filename_display: Mapped[str] = mapped_column(String(255))
+    source_type: Mapped[str] = mapped_column(String(20))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    page_count: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(50))
+    method: Mapped[str] = mapped_column(String(20))
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    requires_user_review: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+
+    pages: Mapped[list[ExtractionPage]] = relationship(
+        back_populates="extraction",
+        cascade="all, delete-orphan",
+    )
+
+
+class ExtractionPage(Base):
+    __tablename__ = "extraction_pages"
+    __table_args__ = (
+        UniqueConstraint(
+            "extraction_id",
+            "page_number",
+            name="uq_extraction_pages_number",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    extraction_id: Mapped[str] = mapped_column(
+        ForeignKey("extractions.id", ondelete="CASCADE"),
+        index=True,
+    )
+    page_number: Mapped[int] = mapped_column(Integer)
+    method: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str] = mapped_column(Text)
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    requires_user_review: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+    )
+
+    extraction: Mapped[Extraction] = relationship(back_populates="pages")

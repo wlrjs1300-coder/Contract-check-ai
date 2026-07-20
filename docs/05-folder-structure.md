@@ -171,9 +171,11 @@ docs/
 ├── architecture/
 │   └── v0.6-document-input-contract.md
 ├── decisions/
-│   └── ADR-006-ocr-strategy.md
+│   ├── ADR-006-ocr-strategy.md
+│   └── ADR-007-pdf-parser-selection.md
 ├── api/
-│   └── v0.6-extraction-result-contract.md
+│   ├── v0.6-extraction-result-contract.md
+│   └── v0.6.1-text-pdf-extraction-api.md
 ├── security/
 │   ├── v0.6-original-document-lifecycle.md
 │   └── v0.6-document-upload-threat-model.md
@@ -181,7 +183,8 @@ docs/
 │   └── v0.6-document-input-ocr-roadmap.md
 └── checklists/
     └── v0.6/
-        └── v0.6.0-input-security-design.md
+        ├── v0.6.0-input-security-design.md
+        └── v0.6.1-text-pdf-extraction.md
 ```
 
 - `docs/architecture/`는 지원 입력, 처리 분기, 상태 전이와 분석 시작 조건을 기록한다.
@@ -190,6 +193,29 @@ docs/
 - `docs/security/`는 원본 파일 생명주기와 업로드·OCR 위협 모델을 기록한다.
 - `docs/roadmaps/`는 보안 게이트를 포함한 단계별 구현 순서를 기록한다.
 - `docs/checklists/v0.6/`는 v0.6 버전별 수행·검증 상태를 기록한다.
+
+v0.6.1 텍스트 PDF 직접 추출 구현에서 추가된 현재 Backend 구조는 다음과 같다.
+
+```text
+backend/
+├── requirements.txt
+├── app/
+│   ├── api/
+│   │   └── extractions.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── extractions.py
+│   ├── services/
+│   │   ├── extraction_temp_files.py
+│   │   └── pdf_extraction.py
+│   ├── db/
+│   │   └── models.py
+│   └── main.py
+└── tests/
+    └── test_pdf_extraction.py
+```
+
+PDF 테스트는 실행 중 메모리에서 합성 PDF를 만들며 저장소에 바이너리 fixture를 추가하지 않는다.
 
 ## 3. 향후 목표 구조
 
