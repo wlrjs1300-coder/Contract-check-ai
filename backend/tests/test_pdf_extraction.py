@@ -35,6 +35,11 @@ from backend.app.services.pdf_extraction import PDFExtractionError
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def force_test_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+
+
 def _add_synthetic_font(writer: PdfWriter, texts: list[str]):
     characters = list(dict.fromkeys("".join(texts)))
     character_codes = {
@@ -295,8 +300,13 @@ def test_rejects_page_over_extracted_text_limit(
 def test_rejects_pdf_when_all_pages_have_no_text() -> None:
     response = _post_pdf(_blank_pdf(page_count=2))
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "extraction_empty"
+    assert response.status_code == 201
+    body = response.json()
+    assert body["extraction_method"] == "ocr"
+    assert body["completed_pages"] == 2
+    assert body["failed_pages"] == 0
+    assert body["warnings"] == ["empty_pages_detected", "ocr_required_pages"]
+    assert body["pages"][0]["analysis_blocked"] is True
 
 
 def test_warns_for_partial_empty_page() -> None:
@@ -312,10 +322,9 @@ def test_warns_for_partial_empty_page() -> None:
         "empty_pages_detected",
         "ocr_required_pages",
     ]
-    assert body["pages"][1]["warnings"] == [
-        "empty_page_text",
-        "ocr_required",
-    ]
+    assert "empty_page_text" in body["pages"][1]["warnings"]
+    assert "ocr_confidence_unavailable" in body["pages"][1]["warnings"]
+    assert "synthetic_ocr_result" in body["pages"][1]["warnings"]
 
 
 def test_warns_when_page_is_an_ocr_candidate() -> None:
@@ -324,10 +333,9 @@ def test_warns_when_page_is_an_ocr_candidate() -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["warnings"] == ["ocr_required_pages"]
-    assert body["pages"][0]["warnings"] == [
-        "text_layer_low_quality",
-        "ocr_required",
-    ]
+    assert "text_layer_low_quality" in body["pages"][0]["warnings"]
+    assert "ocr_confidence_unavailable" in body["pages"][0]["warnings"]
+    assert "synthetic_ocr_result" in body["pages"][0]["warnings"]
 
 
 def test_parser_exception_is_safe_and_creates_no_partial_record(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,9 +21,14 @@ from backend.app.services.image_ocr import (
     MAX_IMAGE_COUNT,
     MAX_IMAGE_FILE_BYTES,
     MAX_REQUEST_SIZE_BYTES,
+    OCR_TIMEOUT_SECONDS,
     ImageExtractionError,
+    OcrFailure,
+    OcrPageInput,
+    OcrPageResult,
     OcrAdapter,
     UnavailableOcrAdapter,
+    SyntheticOcrAdapter,
     canonical_format_from_extension,
     extract_images,
     prepare_image,
@@ -39,6 +46,15 @@ from backend.app.services.extraction_temp_files import (
 from backend.app.services.pdf_extraction import (
     MAX_PDF_SIZE_BYTES,
     PDFExtractionError,
+    PDF_PAGE_CLASSIFICATION_DIRECT_USABLE,
+    PDF_PAGE_CLASSIFICATION_BLANK_CANDIDATE,
+    ExtractedPage,
+    MAX_PDF_RENDER_PIXELS,
+    MAX_RENDER_TIMEOUT_SECONDS as PDF_RENDER_TIMEOUT_SECONDS,
+    UnavailablePdfRenderer,
+    SyntheticPdfRenderer,
+    PdfPageRenderer,
+    PdfRenderRequest,
     extract_text_pdf,
 )
 
@@ -137,7 +153,218 @@ def _serialize_extraction(extraction: Extraction) -> ExtractionResponse:
 
 
 def get_ocr_adapter() -> OcrAdapter:
+    if os.getenv("APP_ENV") == "test":
+        return SyntheticOcrAdapter()
     return UnavailableOcrAdapter()
+
+
+def get_pdf_renderer() -> PdfPageRenderer:
+    if os.getenv("APP_ENV") == "test":
+        return SyntheticPdfRenderer()
+    return UnavailablePdfRenderer()
+
+
+def _run_pdf_ocr_with_timeout(
+    adapter: OcrAdapter,
+    page: OcrPageInput,
+    *,
+    timeout_seconds: float,
+) -> OcrPageResult:
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr-page")
+    future = executor.submit(adapter.recognize, page)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeoutError as exc:
+        raise ImageExtractionError(
+            "pdf_page_render_timeout",
+            "The PDF page text extraction timed out.",
+            status_code=504,
+            retryable=True,
+        ) from exc
+    except OcrFailure as exc:
+        code = exc.code if exc.code == "ocr_unavailable" else "ocr_failed"
+        raise ImageExtractionError(
+            code,
+            "The PDF page text extraction could not be completed.",
+            status_code=503 if code == "ocr_unavailable" else 500,
+            retryable=True,
+        ) from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _process_pdf_pages(
+    pdf_pages: tuple[ExtractedPage, ...],
+    source_path: Path,
+    request_directory: RequestDirectory,
+    ocr_adapter: OcrAdapter,
+    pdf_renderer: PdfPageRenderer,
+) -> tuple[list[dict[str, object]], dict[str, int], tuple[str, ...], bool]:
+    processed_pages: list[dict[str, object]] = []
+    completed_pages = 0
+    failed_pages = 0
+    direct_pages = 0
+    ocr_pages = 0
+    review_required_pages = 0
+    total_text_length = 0
+    document_analysis_blocked = False
+
+    for page in pdf_pages:
+        page_review_required = bool(page.review_required)
+        page_classification = page.classification
+        page_method = "direct"
+        page_failure: str | None = None
+        page_warning_list = list(page.warnings)
+        page_blocks: list[dict[str, object]] = []
+        source_format = None
+        normalized_width: int | None = None
+        normalized_height: int | None = None
+        page_text = page.text
+        count_as_completed = bool(page_text.strip())
+
+        if page.classification != PDF_PAGE_CLASSIFICATION_DIRECT_USABLE:
+            page_review_required = True
+            should_ocr = True
+
+            if should_ocr:
+                try:
+                    render_request = PdfRenderRequest(
+                        request_directory=request_directory,
+                        source_path=source_path,
+                        page_number=page.page_number,
+                        page_id=page.page_id,
+                    )
+                    rendered = pdf_renderer.render(render_request)
+                    if (
+                        rendered.page_number != page.page_number
+                        or rendered.page_id != page.page_id
+                    ):
+                        raise ImageExtractionError(
+                            "pdf_page_render_failed",
+                            "The PDF page rendering returned a mismatched page identity.",
+                            status_code=500,
+                        )
+                    if rendered.pixel_count > MAX_PDF_RENDER_PIXELS:
+                        raise ImageExtractionError(
+                            "pdf_render_limit_exceeded",
+                            "The PDF page was too large to render.",
+                            status_code=422,
+                            retryable=True,
+                        )
+
+                    ocr_result = _run_pdf_ocr_with_timeout(
+                        ocr_adapter,
+                        OcrPageInput(
+                            page_number=page.page_number,
+                            page_id=page.page_id,
+                            image_bytes=rendered.image_bytes,
+                            width=rendered.width,
+                            height=rendered.height,
+                        ),
+                        timeout_seconds=min(
+                            OCR_TIMEOUT_SECONDS,
+                            PDF_RENDER_TIMEOUT_SECONDS,
+                        ),
+                    )
+                    if not ocr_result.text.strip():
+                        raise ImageExtractionError(
+                            "empty_ocr_result",
+                            "No text could be extracted from an image.",
+                            status_code=422,
+                        )
+                    page_warning_list.extend(ocr_result.warnings)
+
+                    for expected_index, block in enumerate(ocr_result.blocks):
+                        if block.block_index != expected_index or block.reading_order != expected_index:
+                            raise ImageExtractionError(
+                                "ocr_result_block_order_mismatch",
+                                "The PDF page OCR result block order is invalid.",
+                                status_code=500,
+                            )
+
+                        page_blocks.append(
+                            {
+                                "block_index": block.block_index,
+                                "text": block.text,
+                                "confidence": block.confidence,
+                                "bbox": block.bbox,
+                                "reading_order": block.reading_order,
+                            }
+                        )
+
+                    page_method = "ocr"
+                    page_text = ocr_result.text
+                    source_format = "png"
+                    normalized_width = rendered.normalized_width
+                    normalized_height = rendered.normalized_height
+                    count_as_completed = bool(page_text.strip())
+
+                    if ocr_result.confidence is None:
+                        page_warning_list.append("ocr_confidence_unavailable")
+                    elif ocr_result.confidence < 0.8:
+                        page_warning_list.append("ocr_confidence_low")
+                except PDFExtractionError as exc:
+                    page_failure = exc.code
+                    page_warning_list.append(exc.code)
+                except ImageExtractionError as exc:
+                    page_failure = exc.code
+                    page_warning_list.append(exc.code)
+
+        if count_as_completed:
+            completed_pages += 1
+            total_text_length += len(page_text)
+            if page_method == "ocr":
+                ocr_pages += 1
+            else:
+                direct_pages += 1
+
+        if page_failure is not None:
+            failed_pages += 1
+            document_analysis_blocked = True
+
+        if page_review_required:
+            review_required_pages += 1
+            document_analysis_blocked = True
+
+        if page.classification == PDF_PAGE_CLASSIFICATION_BLANK_CANDIDATE:
+            page_warning_list.append("empty_page_text")
+
+        processed_pages.append(
+            {
+                "page_number": page.page_number,
+                "classification": page_classification,
+                "method": page_method,
+                "text": page_text,
+                "warnings": list(dict.fromkeys(page_warning_list)),
+                "analysis_blocked": bool(page_failure is not None or page_review_required),
+                "failure": page_failure,
+                "page_id": page.page_id,
+                "requires_user_review": page_review_required,
+                "source_format": source_format,
+                "normalized_width": normalized_width,
+                "normalized_height": normalized_height,
+                "blocks": page_blocks,
+            }
+        )
+
+    summary = {
+        "completed_pages": completed_pages,
+        "failed_pages": failed_pages,
+        "direct_pages": direct_pages,
+        "ocr_pages": ocr_pages,
+        "review_required_pages": review_required_pages,
+        "total_text_length": total_text_length,
+    }
+
+    if completed_pages == 0:
+        document_analysis_blocked = True
+
+    return (
+        processed_pages,
+        summary,
+        (),
+        document_analysis_blocked,
+    )
 
 
 @router.post(
@@ -149,6 +376,8 @@ def get_ocr_adapter() -> OcrAdapter:
 async def create_extraction(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    ocr_adapter: OcrAdapter = Depends(get_ocr_adapter),
+    pdf_renderer: PdfPageRenderer = Depends(get_pdf_renderer),
 ) -> ExtractionResponse:
     filename = file.filename or ""
 
@@ -175,6 +404,8 @@ async def create_extraction(
     extracted_pdf = None
     size_bytes = 0
     pending_error: HTTPException | None = None
+    processed_pages: list[dict[str, object]] = []
+    extraction_summary: dict[str, int] = {}
 
     try:
         request_directory = create_request_directory()
@@ -192,6 +423,15 @@ async def create_extraction(
             )
 
         extracted_pdf = extract_text_pdf(source_path)
+        processed_pages, extraction_summary, _, _ = (
+            _process_pdf_pages(
+                tuple(extracted_pdf.pages),
+                source_path,
+                request_directory,
+                ocr_adapter,
+                pdf_renderer,
+            )
+        )
     except UploadSizeLimitExceededError:
         pending_error = HTTPException(
             status_code=413,
@@ -252,26 +492,55 @@ async def create_extraction(
             ),
         )
 
+    if not processed_pages:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "extraction_failed",
+                "The PDF extraction could not be completed.",
+                retryable=True,
+            ),
+        )
+
+    extraction_method = "direct"
+    if extraction_summary.get("ocr_pages", 0) > 0:
+        extraction_method = "ocr" if extraction_summary.get("direct_pages") == 0 else "mixed"
+
     extraction = Extraction(
         id=str(uuid4()),
         filename_display=_safe_filename_display(filename),
         source_type="pdf",
         size_bytes=size_bytes,
-        page_count=len(extracted_pdf.pages),
+        page_count=len(processed_pages),
         status="review_required",
-        method="direct",
+        method=extraction_method,
         warnings=list(extracted_pdf.warnings),
         requires_user_review=True,
+        extra_data={
+            **extraction_summary,
+            "analysis_blocked": True,
+            "review_required": True,
+        },
     )
     extraction.pages.extend(
         ExtractionPage(
-            page_number=page.page_number,
-            method="direct",
-            text=page.text,
-            warnings=list(page.warnings),
-            requires_user_review=True,
+            page_number=page["page_number"],
+            method=page["method"],
+            text=page["text"],
+            warnings=page["warnings"],
+            requires_user_review=page["requires_user_review"],
+            extra_data={
+                "page_id": page["page_id"],
+                "source_format": page["source_format"],
+                "normalized_width": page["normalized_width"],
+                "normalized_height": page["normalized_height"],
+                "analysis_blocked": page["analysis_blocked"],
+                "failure": page["failure"],
+                "blocks": page["blocks"],
+                "classification": page["classification"],
+            },
         )
-        for page in extracted_pdf.pages
+        for page in processed_pages
     )
     db.add(extraction)
     db.commit()
