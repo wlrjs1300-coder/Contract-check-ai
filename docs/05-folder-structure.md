@@ -177,7 +177,8 @@ docs/
 ├── api/
 │   ├── v0.6-extraction-result-contract.md
 │   ├── v0.6.1-text-pdf-extraction-api.md
-│   └── v0.6.2-analysis-result-schema.md
+│   ├── v0.6.2-analysis-result-schema.md
+│   └── v0.6.3-image-ocr-api.md
 ├── product/
 │   ├── v0.6.2-customer-value-analysis.md
 │   ├── v0.6.2-plans-and-entitlements.md
@@ -191,7 +192,8 @@ docs/
     └── v0.6/
         ├── v0.6.0-input-security-design.md
         ├── v0.6.1-text-pdf-extraction.md
-        └── v0.6.2-customer-value-entitlements.md
+        ├── v0.6.2-customer-value-entitlements.md
+        └── v0.6.3-image-ocr.md
 ```
 
 - `docs/architecture/`는 지원 입력, 처리 분기, 상태 전이와 분석 시작 조건을 기록한다.
@@ -224,6 +226,8 @@ backend/
 ```
 
 PDF 테스트는 실행 중 메모리에서 합성 PDF를 만들며 저장소에 바이너리 fixture를 추가하지 않는다.
+
+v0.6.3 이미지 OCR 기반 구현은 `backend/app/services/image_ocr.py`와 `backend/tests/test_image_ocr.py`를 추가한다. 테스트 이미지는 Pillow로 메모리에서 생성하며 바이너리 fixture나 폰트 파일을 저장소에 추가하지 않는다. Pillow는 image decoder·정규화에만 사용하고 실제 OCR engine은 아직 없다.
 
 ## 3. 향후 목표 구조
 
