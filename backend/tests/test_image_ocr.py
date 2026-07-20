@@ -20,7 +20,6 @@ from backend.app.services.image_ocr import (
     OcrFailure,
     OcrPageInput,
     OcrPageResult,
-    SyntheticOcrAdapter,
 )
 
 
@@ -111,6 +110,33 @@ def _post_images(items: list[tuple[str, bytes, str]]):
         "/extractions/images",
         files=[("files", item) for item in items],
     )
+
+
+def test_adapter_selection_uses_local_ocr_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeLocalAdapter:
+        def recognize(self, page: OcrPageInput) -> OcrPageResult:
+            del page
+            return OcrPageResult(
+                text="로컬 OCR 합성 결과",
+                blocks=(OcrBlock(0, "로컬 OCR 합성 결과", 0.95, (0, 0, 10, 10), 0),),
+                confidence=0.95,
+            )
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OCR_ADAPTER", "local_korean")
+    monkeypatch.setattr(extractions_api, "LocalKoreanOcrAdapter", lambda: _FakeLocalAdapter())
+    adapter = extractions_api.get_ocr_adapter()
+    response = adapter.recognize(OcrPageInput(page_number=1, page_id="1", image_bytes=b"", width=10, height=10))
+
+    assert response.text == "로컬 OCR 합성 결과"
+
+
+def test_synthetic_adapter_is_blocked_outside_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OCR_ADAPTER", "synthetic")
+
+    with pytest.raises(RuntimeError, match="Synthetic OCR adapter is test-only"):
+        _ = extractions_api.get_ocr_adapter()
 
 
 @pytest.mark.parametrize(
@@ -316,6 +342,39 @@ def test_quality_warnings_are_review_only_signals(
     assert "possible_blur_or_blank" in warnings
     assert "possible_underexposure" in warnings
     assert "deskew_not_applied" in warnings
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_suspected"),
+    [
+        ("계약서 금액: 3,000,000원", False),
+        ("계약서 금액: 3000,000원", True),
+        ("계약서 금액: 1,00,000원", True),
+        ("계약서 금액: 10,0000원", True),
+        ("계약서 금액: 1,000원", False),
+        ("계약서 금액: 3000000원", False),
+        ("날짜: 2026-07-20", False),
+        ("조항 10-1: 위반 시 손해배상", False),
+    ],
+)
+def test_amount_format_suspected_heuristics(text: str, expected_suspected: bool) -> None:
+    assert image_ocr.LocalKoreanOcrAdapter.is_amount_format_suspected(text) is expected_suspected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_candidates"),
+    [
+        ("매출액: 3,000원", ["3,000원"]),
+        ("혼합: 3000,000원", ["3000,000원"]),
+        ("조항: 1,000,원", ["1,000,원"]),
+        ("가격: 3000000원", []),
+    ],
+)
+def test_amount_candidate_extraction(
+    text: str,
+    expected_candidates: list[str],
+) -> None:
+    assert image_ocr.LocalKoreanOcrAdapter._iter_amount_candidates(text) == expected_candidates
 
 
 def test_file_and_request_size_limits(
@@ -564,14 +623,25 @@ def test_timeout_is_safe_and_cleans_files(
 
 
 def test_default_adapter_and_synthetic_production_guard() -> None:
+    app.dependency_overrides[extractions_api.get_ocr_adapter] = (
+        lambda: extractions_api.UnavailableOcrAdapter()
+    )
+
     response = _post_images(
         [("unavailable.png", _image_bytes("PNG"), "image/png")]
     )
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "ocr_unavailable"
+    assert response.json()["detail"]["analysis_blocked"] is True
+    app.dependency_overrides.pop(extractions_api.get_ocr_adapter, None)
+
+
+def test_synthetic_adapter_is_blocked_in_production_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OCR_ADAPTER", "synthetic")
     with pytest.raises(RuntimeError):
-        SyntheticOcrAdapter()
+        _ = extractions_api.get_ocr_adapter()
 
 
 def test_cleanup_failure_blocks_database_and_exposes_no_path(

@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import io
 import os
-import warnings
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Any
+import warnings
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from uuid import uuid4
-
 from PIL import Image, ImageFilter, ImageOps, ImageStat, UnidentifiedImageError
+
+try:  # pragma: no cover - optional dependency for local OCR adapter
+    import pytesseract  # type: ignore
+    from pytesseract.pytesseract import Output as _TessOutput
+    from pytesseract import TesseractNotFoundError as _TesseractNotFoundError
+except Exception:  # pragma: no cover - import-time fallback when dependency is absent
+    pytesseract = None
+    _TessOutput = None
+    _TesseractNotFoundError = None
 
 
 MAX_IMAGE_FILE_BYTES = 10 * 1024 * 1024
@@ -106,6 +115,330 @@ class SyntheticOcrAdapter:
             blocks=(OcrBlock(0, text, None, None, 0),),
             confidence=None,
             warnings=("synthetic_ocr_result",),
+        )
+
+
+class LocalKoreanOcrAdapter:
+    """Local image OCR adapter (offline, no external API calls)."""
+
+    def __init__(self, *, language: str = "kor+eng") -> None:
+        if pytesseract is None or _TessOutput is None:
+            raise OcrFailure("ocr_engine_unavailable")
+
+        self.language = language
+        self._pytesseract: Any = pytesseract
+        self._output_type = _TessOutput.DICT
+        self._tesseract_cmd = os.getenv("TESSERACT_CMD")
+        if self._tesseract_cmd:
+            self._pytesseract.pytesseract.tesseract_cmd = self._tesseract_cmd
+
+    @staticmethod
+    def _safe_int(value: Any, *, fallback: int | None = None) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _safe_confidence(value: Any) -> float | None:
+        try:
+            raw = float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        if not (0 <= raw <= 100):
+            return None
+        return raw / 100.0
+
+    @staticmethod
+    def _normalize_bbox(
+        left: int,
+        top: int,
+        width: int,
+        height: int,
+        page_width: int,
+        page_height: int,
+    ) -> tuple[int, int, int, int]:
+        right = max(left, left + max(0, width))
+        bottom = max(top, top + max(0, height))
+        right = min(right, page_width)
+        bottom = min(bottom, page_height)
+        left = max(0, min(left, page_width))
+        top = max(0, min(top, page_height))
+        return (left, top, right, bottom)
+
+    @staticmethod
+    def _line_bbox(words: list[dict[str, Any]]) -> tuple[int, int, int, int]:
+        return (
+            min(word["left"] for word in words),
+            min(word["top"] for word in words),
+            max(word["left"] + word["width"] for word in words),
+            max(word["top"] + word["height"] for word in words),
+        )
+
+    @staticmethod
+    def _iter_amount_candidates(text: str) -> list[str]:
+        raw_candidates = re.findall(r"\b[0-9][0-9,]*(?:원)?\b", text)
+        return [candidate for candidate in raw_candidates if "," in candidate]
+
+    @staticmethod
+    def _is_valid_grouped_amount(candidate: str) -> bool:
+        normalized = candidate.strip().replace(" ", "")
+        if normalized.endswith("원"):
+            normalized = normalized[:-1]
+
+        if "," not in normalized:
+            return False
+
+        groups = normalized.split(",")
+        if not all(groups):
+            return False
+        if len(groups[0]) < 1 or len(groups[0]) > 3:
+            return False
+        return all(len(group) == 3 for group in groups[1:])
+
+    @staticmethod
+    def _amount_format_suspected(text: str) -> bool:
+        for candidate in LocalKoreanOcrAdapter._iter_amount_candidates(text):
+            if not LocalKoreanOcrAdapter._is_valid_grouped_amount(candidate):
+                return True
+        return False
+
+    @staticmethod
+    def is_amount_format_suspected(text: str) -> bool:
+        return LocalKoreanOcrAdapter._amount_format_suspected(text)
+
+    @staticmethod
+    def _date_format_suspected(text: str) -> bool:
+        return bool(re.search(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}", text))
+
+    @staticmethod
+    def _should_join(prev: str, curr: str, gap: int, avg_width: float) -> bool:
+        if not prev or not curr:
+            return False
+        prev_last = prev[-1]
+        curr_first = curr[0]
+
+        if prev_last.isdigit() and curr_first in {",", ".", "원", "억", "만원", "₩"}:
+            return True
+        if prev_last.isdigit() and curr.isdigit():
+            return True
+        if prev_last == "(" and curr_first == ")":
+            return True
+        if curr == ":":
+            return True
+        if re.fullmatch(r"[\uac00-\ud7a3]", curr_first) and re.fullmatch(
+            r"[\uac00-\ud7a3]",
+            prev_last,
+        ):
+            return True
+        if gap <= int(max(1.0, avg_width * 0.65)):
+            return True
+        return False
+
+    def _join_ocr_tokens(self, words: list[dict[str, Any]]) -> tuple[str, bool]:
+        if not words:
+            return "", False
+
+        avg_width = 12.0
+        widths = [max(1, word["width"]) for word in words]
+        lengths = [max(1, len(word["text"])) for word in words]
+        avg_width = (
+            sum(widths) / sum(lengths) if sum(lengths) > 0 else 12.0
+        )
+
+        normalized_parts: list[str] = [str(words[0]["text"]).strip()]
+        modified = False
+        for index in range(1, len(words)):
+            current = str(words[index]["text"]).strip()
+            if not current:
+                continue
+            previous = normalized_parts[-1]
+            gap = max(
+                0,
+                int(words[index]["left"])
+                - (int(words[index - 1]["left"]) + int(words[index - 1]["width"])),
+            )
+
+            if self._should_join(previous, current, gap, avg_width):
+                candidate = f"{previous}{current}"
+                if candidate != f"{previous} {current}":
+                    modified = True
+                normalized_parts[-1] = candidate
+            else:
+                normalized_parts.append(current)
+                if previous and current and previous[-1] != " " and current[0] != " ":
+                    modified = True
+
+        merged = " ".join(normalized_parts).strip()
+        merged = re.sub(r"\s+", " ", merged)
+        merged = re.sub(r"\s*:\s*", ":", merged)
+        merged = re.sub(r"\s*([,)%}\]])", r"\1", merged)
+        merged = re.sub(r"\b(\d+)\s+(원)\b", r"\1\2", merged)
+        merged = re.sub(r"\b(\d+)\s+([,])", r"\1\2", merged)
+        return merged.strip(), modified
+
+    def _build_blocks_and_text(
+        self,
+        page: OcrPageInput,
+        data: dict[str, Any],
+    ) -> tuple[tuple[OcrBlock, ...], str, tuple[str, ...]]:
+        line_map: dict[tuple[int, int, int], list[dict[str, Any]]] = {}
+        n_items = len(data.get("text", []))
+        for index in range(n_items):
+            text_value = str(data["text"][index]).strip()
+            if not text_value:
+                continue
+
+            level = self._safe_int(data["level"][index])
+            if level is None or level < 5:
+                continue
+
+            block_num = self._safe_int(data.get("block_num", [None] * n_items)[index])
+            paragraph_num = self._safe_int(data.get("par_num", [0] * n_items)[index], fallback=0)
+            line_num = self._safe_int(data.get("line_num", [None] * n_items)[index])
+            if block_num is None or line_num is None:
+                continue
+
+            key = (block_num, paragraph_num, line_num)
+            line_map.setdefault(key, []).append(
+                {
+                    "text": text_value,
+                    "conf": self._safe_confidence(data.get("conf", ["-1"])[index]),
+                    "left": self._safe_int(data.get("left", [0] * n_items)[index], fallback=0),
+                    "top": self._safe_int(data.get("top", [0] * n_items)[index], fallback=0),
+                    "width": self._safe_int(data.get("width", [0] * n_items)[index], fallback=0),
+                    "height": self._safe_int(data.get("height", [0] * n_items)[index], fallback=0),
+                    "word_num": self._safe_int(data.get("word_num", [None] * n_items)[index]),
+                    "index": index,
+                },
+            )
+
+        if not line_map:
+            raise OcrFailure("empty_ocr_result")
+
+        ordered_by_contract = sorted(line_map.items(), key=lambda item: (item[0][0], item[0][1], item[0][2]))
+        ordered_by_geometry = sorted(
+            line_map.items(),
+            key=lambda item: (
+                self._line_bbox(item[1])[1],
+                self._line_bbox(item[1])[0],
+                item[0][0],
+                item[0][1],
+                item[0][2],
+            ),
+        )
+        page_warnings: list[str] = []
+        if [k for k, _ in ordered_by_contract] != [k for k, _ in ordered_by_geometry]:
+            page_warnings.append("ocr_reading_order_uncertain")
+
+        blocks: list[OcrBlock] = []
+        for order, (_, words) in enumerate(ordered_by_contract):
+            if not words:
+                continue
+            words = sorted(
+                words,
+                key=lambda value: (
+                    value["word_num"] if value["word_num"] is not None else 10_000,
+                    value["left"],
+                    value["index"],
+                ),
+            )
+
+            line_text, spacing_changed = self._join_ocr_tokens(words)
+            if spacing_changed:
+                page_warnings.append("ocr_spacing_normalized")
+            if not line_text:
+                continue
+
+            confidences = [word["conf"] for word in words if word["conf"] is not None]
+            confidence = sum(confidences) / len(confidences) if confidences else None
+            if confidence is not None:
+                confidence = max(0.0, min(1.0, confidence))
+
+            lefts = [w["left"] for w in words]
+            tops = [w["top"] for w in words]
+            rights = [w["left"] + w["width"] for w in words]
+            bottoms = [w["top"] + w["height"] for w in words]
+            block_bbox = self._normalize_bbox(
+                min(lefts),
+                min(tops),
+                max(rights) - min(lefts),
+                max(bottoms) - min(tops),
+                page.width,
+                page.height,
+            )
+            blocks.append(
+                OcrBlock(
+                    block_index=order,
+                    text=line_text,
+                    confidence=confidence,
+                    bbox=block_bbox,
+                    reading_order=order,
+                )
+            )
+
+        if not blocks:
+            raise OcrFailure("empty_ocr_result")
+
+        text = "\n".join(block.text for block in blocks).strip()
+        if not text:
+            raise OcrFailure("empty_ocr_result")
+
+        if any(word_conf < 0.25 for word_conf in [word["conf"] for line in line_map.values() for word in line if word["conf"] is not None]):
+            page_warnings.append("ocr_low_confidence")
+        if self._amount_format_suspected(text):
+            page_warnings.append("ocr_amount_format_suspected")
+        if self._date_format_suspected(text):
+            page_warnings.append("ocr_date_format_suspected")
+
+        return tuple(blocks), text, tuple(dict.fromkeys(page_warnings))
+
+    def recognize(self, page: OcrPageInput) -> OcrPageResult:
+        try:
+            with Image.open(io.BytesIO(page.image_bytes)) as opened:
+                opened_rgb = opened.convert("RGB")
+                data = self._pytesseract.image_to_data(
+                    opened_rgb,
+                    lang=self.language,
+                    config="--psm 6",
+                    output_type=self._output_type,
+                )
+        except Exception as exc:
+            if _TesseractNotFoundError is not None and isinstance(
+                exc, _TesseractNotFoundError
+            ):
+                raise OcrFailure("ocr_engine_unavailable") from exc
+            message = str(exc)
+            if "Unable to load any of the requested languages" in message:
+                raise OcrFailure("ocr_model_unavailable") from exc
+            raise OcrFailure("ocr_failed") from exc
+
+        if not isinstance(data, dict):
+            raise OcrFailure("ocr_result_invalid")
+        try:
+            blocks, text, adapter_warnings = self._build_blocks_and_text(page, data)
+        except OcrFailure:
+            raise
+        except Exception as exc:
+            raise OcrFailure("ocr_result_invalid") from exc
+
+        if len(text.strip()) == 0:
+            raise OcrFailure("empty_ocr_result")
+
+        if any(block.confidence is not None and block.confidence < 0.25 for block in blocks):
+            warnings = ("ocr_low_confidence", "ocr_confidence_low")
+        else:
+            warnings = ()
+        confidence = None
+        valid_confidence = [block.confidence for block in blocks if block.confidence is not None]
+        if valid_confidence:
+            confidence = sum(valid_confidence) / len(valid_confidence)
+
+        return OcrPageResult(
+            text=text,
+            blocks=blocks,
+            confidence=confidence,
+            warnings=tuple(dict.fromkeys((*adapter_warnings, *warnings))),
         )
 
 
@@ -369,11 +702,31 @@ def _run_adapter(
             retryable=True,
         ) from exc
     except OcrFailure as exc:
-        code = exc.code if exc.code == "ocr_unavailable" else "ocr_failed"
+        if exc.code in {
+            "ocr_unavailable",
+            "ocr_engine_unavailable",
+            "ocr_model_unavailable",
+            "ocr_initialization_failed",
+            "ocr_result_invalid",
+            "ocr_text_limit_exceeded",
+            "ocr_timeout",
+            "empty_ocr_result",
+            "ocr_failed",
+        }:
+            code = exc.code
+        else:
+            code = "ocr_failed"
         raise ImageExtractionError(
             code,
             "The image text extraction could not be completed.",
-            status_code=503 if code == "ocr_unavailable" else 500,
+            status_code=503
+            if code
+            in {
+                "ocr_unavailable",
+                "ocr_engine_unavailable",
+                "ocr_model_unavailable",
+            }
+            else 500,
             retryable=True,
         ) from exc
     except Exception as exc:
