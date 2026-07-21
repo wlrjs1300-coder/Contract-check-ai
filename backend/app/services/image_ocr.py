@@ -34,6 +34,7 @@ MAX_METADATA_BYTES = 256 * 1024
 OCR_TIMEOUT_SECONDS = 10.0
 MIN_RECOMMENDED_WIDTH = 1_000
 MIN_RECOMMENDED_HEIGHT = 1_000
+MIN_RECOMMENDED_AREA_RATIO = 0.85
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 JPEG_SIGNATURE = b"\xff\xd8\xff"
 SUPPORTED_EXTENSIONS = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png"}
@@ -558,23 +559,223 @@ def _metadata_size(image: Image.Image) -> int:
 
 
 def _quality_warnings(image: Image.Image) -> list[str]:
+    return _assess_image_quality(image)
+
+
+def _to_grayscale_histogram_sample(image: Image.Image) -> Image.Image:
+    sample = ImageOps.grayscale(image)
+    sample.thumbnail((1024, 1024))
+    return sample
+
+
+def _is_dark_or_bright_excessive(pixels: list[int], total: int) -> tuple[bool, bool]:
+    if total == 0:
+        return False, False
+
+    dark_pixels = sum(1 for pixel in pixels if pixel < 30)
+    bright_pixels = sum(1 for pixel in pixels if pixel > 225)
+    dark_ratio = dark_pixels / total
+    bright_ratio = bright_pixels / total
+    return dark_ratio > 0.55, bright_ratio > 0.55
+
+
+def _estimate_skew_angle(image: Image.Image) -> float:
+    if image.width < 40 or image.height < 40:
+        return 0.0
+
+    sample = image.convert("L")
+    sample.thumbnail((640, 640))
+    base = sample.point(lambda value: 0 if value < 185 else 255)
+    base_counts = _row_text_strength(base)
+    base_score = _line_strength_score(base_counts)
+
+    best_angle = 0.0
+    best_score = base_score
+    candidates = (-5.0, -3.0, -2.0, -1.0, 1.0, 2.0, 3.0, 5.0)
+
+    for angle in candidates:
+        rotated = base.rotate(angle, expand=True, fillcolor=255)
+        score = _line_strength_score(_row_text_strength(rotated))
+        if score > best_score * 1.18:
+            best_score = score
+            best_angle = angle
+
+    return best_angle
+
+
+def _row_text_strength(image: Image.Image) -> list[int]:
+    width, height = image.size
+    pixels = image.load()
+    row_counts: list[int] = []
+    for y in range(height):
+        count = 0
+        for x in range(width):
+            if pixels[x, y] < 200:
+                count += 1
+        row_counts.append(count)
+    return row_counts
+
+
+def _line_strength_score(counts: list[int]) -> float:
+    if not counts:
+        return 0.0
+    mean = sum(counts) / len(counts)
+    if mean <= 0:
+        return 0.0
+    variance = sum((value - mean) ** 2 for value in counts) / len(counts)
+    return variance / mean
+
+
+def _edge_density(image: Image.Image) -> float:
+    edges = ImageStat.Stat(image.filter(ImageFilter.FIND_EDGES))
+    return float(edges.var[0])
+
+
+def _blur_detection_score(image: Image.Image) -> float:
+    reblurred = image.filter(ImageFilter.GaussianBlur(1.0))
+    original = _pixel_values(image)
+    smoothed = _pixel_values(reblurred)
+    if not original:
+        return 0.0
+    return sum(abs(current - previous) for current, previous in zip(original, smoothed)) / len(original)
+
+
+def _assess_image_quality(image: Image.Image) -> list[str]:
     result: list[str] = []
     width, height = image.size
     if width < MIN_RECOMMENDED_WIDTH or height < MIN_RECOMMENDED_HEIGHT:
         result.append("low_resolution")
+        result.append("image_resolution_low")
 
-    sample = ImageOps.grayscale(image)
-    sample.thumbnail((512, 512))
-    brightness = ImageStat.Stat(sample).mean[0]
-    edge_variance = ImageStat.Stat(sample.filter(ImageFilter.FIND_EDGES)).var[0]
-    if edge_variance < 20:
-        result.append("possible_blur_or_blank")
-    if brightness < 30:
+    sample = _to_grayscale_histogram_sample(image)
+    pixel_values = _pixel_values(sample)
+    total_pixels = len(pixel_values)
+
+    if total_pixels == 0:
+        result.append("image_unreadable")
+        return result
+
+    statistics = ImageStat.Stat(sample)
+    brightness = statistics.mean[0]
+    stddev = statistics.stddev[0]
+    clipped_black = sum(1 for pixel in pixel_values if pixel <= 1) / total_pixels
+    clipped_white = sum(1 for pixel in pixel_values if pixel >= 254) / total_pixels
+    edge_variance = _edge_density(sample)
+    blurred = _row_text_strength(sample)
+    line_strength = _line_strength_score(blurred)
+    blur_score = _blur_detection_score(sample)
+
+    result.append("image_low_contrast") if stddev < 18 else None
+    if stddev < 18 and brightness < 95:
+        result.append("image_underexposed")
         result.append("possible_underexposure")
-    elif brightness > 225:
+    if stddev < 18 and brightness > 170:
+        result.append("image_overexposed")
         result.append("possible_overexposure")
+
+    too_dark, too_bright = _is_dark_or_bright_excessive(pixel_values, total_pixels)
+    if too_dark:
+        result.append("image_shadow_suspected")
+    if too_bright:
+        result.append("image_glare_suspected")
+
+    if clipped_black > 0.18:
+        result.append("image_shadow_suspected")
+    if clipped_white > 0.35:
+        result.append("image_glare_suspected")
+    if clipped_white > 0.80:
+        result.append("image_overexposed")
+
+    if edge_variance < 25:
+        result.append("possible_blur_or_blank")
+        result.append("image_blurry")
+        if edge_variance < 10 or len(set(pixel_values)) <= 2:
+            result.append("image_quality_too_low")
+    elif line_strength < 3.5:
+        result.append("image_blurry")
+    elif blur_score < 2.0:
+        result.append("image_blurry")
+    if line_strength < 1.8:
+        result.append("image_quality_too_low")
+    if blur_score < 1.0:
+        result.append("image_quality_too_low")
+
+    if total_pixels >= 1000 and max(blurred) == 0:
+        result.append("image_unreadable")
+
+    bbox = sample.point(lambda value: 0 if value < 240 else 255).getbbox()
+    if bbox is None:
+        return list(dict.fromkeys(result))
+
+    left, top, right, bottom = bbox
+    content_width = right - left
+    content_height = bottom - top
+    if content_width <= 0 or content_height <= 0:
+        return list(dict.fromkeys(result))
+
+    content_crop = sample.crop(bbox)
+    content_pixels = _pixel_values(content_crop)
+    content_total = len(content_pixels)
+    content_stats = ImageStat.Stat(content_crop)
+    content_stddev = content_stats.stddev[0]
+    content_brightness = content_stats.mean[0]
+
+    content_clipped_black = (
+        sum(1 for pixel in content_pixels if pixel <= 1) / content_total
+        if content_total > 0
+        else 0.0
+    )
+    content_clipped_white = (
+        sum(1 for pixel in content_pixels if pixel >= 254) / content_total
+        if content_total > 0
+        else 0.0
+    )
+
+    if content_clipped_black > 0.18:
+        result.append("image_shadow_suspected")
+    if content_clipped_white > 0.55:
+        result.append("image_glare_suspected")
+    if content_stddev < 12 and content_brightness > 250:
+        result.append("image_overexposed")
+        result.append("possible_overexposure")
+    if content_stddev < 12 and content_brightness < 5:
+        result.append("image_underexposed")
+        result.append("possible_underexposure")
+
+    if width < MIN_RECOMMENDED_WIDTH or height < MIN_RECOMMENDED_HEIGHT:
+        result.append("image_quality_too_low")
+
+    skew_angle = _estimate_skew_angle(content_crop)
+    if 1.0 <= abs(skew_angle) <= 4.0:
+        result.append("deskew_uncertain")
+    elif abs(skew_angle) > 4.0:
+        result.append("perspective_distortion_suspected")
+
+    if stddev < 10:
+        result.append("text_too_small")
+
+    if content_width < int(width * MIN_RECOMMENDED_AREA_RATIO) or content_height < int(
+        height * MIN_RECOMMENDED_AREA_RATIO
+    ):
+        result.append("document_boundary_uncertain")
+        result.append("background_included")
+    if left <= 2 or top <= 2 or right >= width - 2 or bottom >= height - 2:
+        result.append("document_crop_suspected")
+
+    # Conservative hint only; no aggressive cropping performed.
+    if width > 0 and (left < int(width * 0.08) or top < int(height * 0.08)):
+        result.append("background_included")
+
     return result
 
+
+def _pixel_values(image: Image.Image) -> list[int]:
+    data = (
+        image.get_flattened_data()
+        if hasattr(image, "get_flattened_data")
+        else list(image.getdata())
+    )
+    return list(data)
 
 def prepare_image(
     source_path: Path,
