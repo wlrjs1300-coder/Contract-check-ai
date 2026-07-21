@@ -61,6 +61,14 @@ def _make_ocr_document_bytes(*, ext: str, width: int = 1700, height: int = 1200)
     return buffer.getvalue()
 
 
+def _rotate_image_bytes(image_bytes: bytes, *, angle: float) -> bytes:
+    original = Image.open(BytesIO(image_bytes))
+    rotated = original.rotate(angle, expand=True, fillcolor="white")
+    buffer = BytesIO()
+    rotated.save(buffer, format=original.format or "PNG")
+    return buffer.getvalue()
+
+
 def _post_image(file_name: str, content: bytes, content_type: str):
     return client.post(
         "/extractions/images",
@@ -152,3 +160,27 @@ def test_real_local_ocr_png_jpg_smoke_and_review_confirmation_flow(
         confirm_body = confirm_response.json()
         assert confirm_body["extraction_status"] == "confirmed"
         assert confirm_body["confirmation_checksum"]
+
+
+def test_real_local_ocr_mild_skew_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_local_ocr_available(monkeypatch)
+
+    base = _make_ocr_document_bytes(ext="PNG")
+    skewed = _rotate_image_bytes(base, angle=3.0)
+    response = _post_image("contract_skewed.png", skewed, "image/png")
+
+    assert response.status_code == 201
+    body = response.json()
+    page = body["pages"][0]
+    assert page["review_required"] is True
+    assert page["analysis_blocked"] is True
+    assert page["text"]
+    # Quality warning may be detected as uncertain deskewing.
+    assert any(
+        code in page["warnings"]
+        for code in (
+            "deskew_uncertain",
+            "perspective_distortion_suspected",
+            "image_blurry",
+        )
+    )
