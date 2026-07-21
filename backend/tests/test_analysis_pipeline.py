@@ -541,7 +541,7 @@ def test_run_analysis_pipeline_blocks_provider_on_residual_pii(
 
     with pytest.raises(
         ValueError,
-        match="Residual personal data remains after masking",
+        match="provider_data_minimization_failed",
     ):
         run_analysis_pipeline(
             db_session,
@@ -587,7 +587,7 @@ class UnsafeSummaryProvider:
         ),
         (
             "담당자 연락처는 010-1234-5678입니다.",
-            "Provider result summary contains regenerated personal data",
+            "provider_output_pii_detected",
         ),
     ],
 )

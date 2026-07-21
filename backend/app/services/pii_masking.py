@@ -15,13 +15,22 @@ from typing import Any
 
 MASK_PREFIXES = {
     "person": "PERSON",
+    "person_name": "NAME",
     "phone": "PHONE",
     "email": "EMAIL",
+    "url_query": "QUERY",
     "address": "ADDRESS",
     "date_of_birth": "BIRTH",
     "national_id_number": "RRN",
+    "foreigner_registration_number": "FR_NO",
     "business_registration_number": "BIZ_NO",
+    "corporate_registration_number": "CORP_NO",
     "account_number": "ACCOUNT",
+    "card_number": "CARD_NO",
+    "postal_code": "POSTAL_CODE",
+    "ip_address": "IP",
+    "passport_number": "PASSPORT",
+    "driver_license_number": "LICENSE_NO",
 }
 
 PERSON_LABELS = (
@@ -66,12 +75,25 @@ VALUE_BOUNDARY_LABELS = tuple(
 
 PHONE_RE = re.compile(r"010-\d{4}-\d{4}")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-NATIONAL_ID_RE = re.compile(r"\d{6}-\d{7}")
-BUSINESS_NUMBER_RE = re.compile(r"\d{3}-\d{2}-\d{5}")
-ACCOUNT_NUMBER_RE = re.compile(r"\d{3}-\d{4}-\d{4}")
+PHONE_GENERAL_RE = re.compile(r"\b(?:01[016789]|0[2-9]\d)-\d{3,4}-\d{4}\b")
+NATIONAL_ID_RE = re.compile(r"\b\d{6}-\d{7}\b")
+FOREIGNER_ID_RE = re.compile(r"\b\d{6}-[1-4][0-9]{6}\b")
+BUSINESS_NUMBER_RE = re.compile(r"\b\d{3}-\d{2}-\d{5}\b")
+CORPORATE_NUMBER_RE = re.compile(r"\b\d{6}-\d{7}\b")
+ACCOUNT_NUMBER_RE = re.compile(r"\b\d{3,6}-\d{3,4}-\d{4}\b")
+CARD_NUMBER_RE = re.compile(r"\b(?:\d{4}-){3}\d{4}\b")
+POSTAL_CODE_RE = re.compile(r"\b\d{5}\b")
+IP_ADDRESS_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+PASSPORT_RE = re.compile(r"\b[A-Z]{1,2}\d{7,8}\b")
+LICENSE_RE = re.compile(r"(?:면허|운전면허)[^\\n\\r\\s:]{0,6}:?\\s*[0-9]{6,10}")
+URL_QUERY_RE = re.compile(
+    r"(?i)(?:[?&])(?:name|user|email|tel|phone|id|ssn|rrn|acct|account|card|bank|license|driver|pass|name|token|key)=[^&\\s]+"
+)
 MASK_TOKEN_RE = re.compile(r"^\[[A-Z_]+_\d+\]$")
 MASK_TOKEN_SPAN_RE = re.compile(r"\[([A-Z_]+)_(\d+)\]")
-ENTITY_TYPE_BY_PREFIX = {prefix: entity_type for entity_type, prefix in MASK_PREFIXES.items()}
+ENTITY_TYPE_BY_PREFIX = {
+    prefix: entity_type for entity_type, prefix in MASK_PREFIXES.items()
+}
 
 
 @dataclass(order=True)
@@ -242,10 +264,10 @@ def _deduplicate_and_resolve(
         "person": 10,
         "address": 10,
         "date_of_birth": 10,
-        "account_number": 10,
+        "phone": 9,
+        "account_number": 6,
         "business_registration_number": 9,
         "national_id_number": 8,
-        "phone": 7,
         "email": 7,
     }
     selected: list[Candidate] = []
@@ -303,8 +325,18 @@ def detect_entities(
 
     for pattern, entity_type in (
         (BUSINESS_NUMBER_RE, "business_registration_number"),
+        (CORPORATE_NUMBER_RE, "corporate_registration_number"),
         (NATIONAL_ID_RE, "national_id_number"),
+        (FOREIGNER_ID_RE, "foreigner_registration_number"),
         (PHONE_RE, "phone"),
+        (PHONE_GENERAL_RE, "phone"),
+        (CARD_NUMBER_RE, "card_number"),
+        (IP_ADDRESS_RE, "ip_address"),
+        (POSTAL_CODE_RE, "postal_code"),
+        (ACCOUNT_NUMBER_RE, "account_number"),
+        (PASSPORT_RE, "passport_number"),
+        (LICENSE_RE, "driver_license_number"),
+        (URL_QUERY_RE, "url_query"),
         (EMAIL_RE, "email"),
     ):
         new_candidates, order = _regex_candidates(normalized, pattern, entity_type, order)
