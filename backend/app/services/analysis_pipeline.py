@@ -6,11 +6,17 @@ from backend.app.db.models import (
     AnalysisJob,
     AnalysisResultItem,
     Clause,
+    Extraction,
 )
 from backend.app.services.analysis_provider import (
     DEFAULT_ANALYSIS_PROVIDER,
     AnalysisProvider,
     AnalysisProviderInput,
+)
+from backend.app.services.evidence_linking import (
+    EvidenceValidationError,
+    bind_evidence_to_finding,
+    calculate_snapshot_hash,
 )
 from backend.app.services.output_safety import (
     ALLOW,
@@ -33,6 +39,29 @@ VALID_JOB_STATUSES = {
     "completed",
     "failed",
 }
+
+
+def _load_confirmation_snapshot(
+    db: Session,
+    document_id: str,
+) -> tuple[list[dict[str, object]], str | None, int | None]:
+    extraction = db.get(Extraction, document_id)
+    if extraction is None:
+        return [], None, None
+
+    extra_data = extraction.extra_data or {}
+    snapshot = extra_data.get("confirmation_snapshot")
+    if not isinstance(snapshot, list):
+        return [], None, None
+
+    snapshot_hash = extra_data.get("confirmation_checksum")
+    snapshot_version = extra_data.get("snapshot_version")
+    snapshot_list = [dict(item) for item in snapshot]
+    return snapshot_list, (
+        str(snapshot_hash) if snapshot_hash else calculate_snapshot_hash(snapshot_list)
+    ), (
+        int(snapshot_version) if isinstance(snapshot_version, int) else None
+    )
 
 
 def validate_reference_id(
@@ -95,6 +124,10 @@ def run_analysis_pipeline(
 ) -> None:
     job.status = "processing"
     db.flush()
+    snapshot, snapshot_hash, snapshot_version = _load_confirmation_snapshot(
+        db,
+        job.document_id,
+    )
 
     try:
         for clause in clauses:
@@ -131,6 +164,18 @@ def run_analysis_pipeline(
                     "Provider result summary failed output safety validation."
                 )
 
+            try:
+                evidence = bind_evidence_to_finding(
+                    document_id=job.document_id,
+                    extraction_id=job.document_id,
+                    clause=clause,
+                    snapshot=snapshot,
+                    snapshot_hash=snapshot_hash,
+                    snapshot_version=snapshot_version,
+                )
+            except EvidenceValidationError as exc:
+                raise ValueError(f"{exc.code}: {exc.detail}") from exc
+
             job.result_items.append(
                 AnalysisResultItem(
                     clause_record_id=clause.id,
@@ -140,7 +185,11 @@ def run_analysis_pipeline(
                     expert_review_recommended=(
                         result_data.expert_review_recommended
                     ),
-                    extra_data={},
+                    extra_data={
+                        "evidence": evidence,
+                        "evidence_snapshot_hash": snapshot_hash,
+                        "snapshot_version": snapshot_version,
+                    },
                 )
             )
 

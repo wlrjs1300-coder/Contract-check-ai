@@ -123,6 +123,10 @@ def test_create_analysis_job_and_get_results() -> None:
     assert result["items"][0]["display_label"] == "추가 확인"
     assert result["items"][0]["summary"] == "합성 분석 결과입니다."
     assert result["items"][0]["expert_review_recommended"] is False
+    assert result["snapshot_stale"] is False
+    assert result["items"][0]["is_stale"] is False
+    assert result["items"][0]["evidence"]
+    assert result["items"][0]["evidence"][0]["document_id"] == document_id
 
 
 def test_reject_analysis_job_for_missing_document() -> None:
