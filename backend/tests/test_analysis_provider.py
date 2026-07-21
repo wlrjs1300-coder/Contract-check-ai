@@ -20,7 +20,7 @@ def test_synthetic_provider_returns_expected_result() -> None:
 
     assert result.reference_id == provider_input.reference_id
     assert result.display_label == "추가 확인"
-    assert result.summary == "합성 분석 결과입니다."
+    assert result.summary == "Synthetic provider result."
     assert result.expert_review_recommended is False
 
     result.validate()

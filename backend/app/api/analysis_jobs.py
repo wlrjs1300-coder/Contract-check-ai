@@ -1,4 +1,4 @@
-from uuid import uuid4
+﻿from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
@@ -8,6 +8,7 @@ from backend.app.db.database import get_db
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction
 from backend.app.services.clause_splitter import split_clauses_with_snapshot
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
+from backend.app.services.analysis_provider_factory import create_analysis_provider
 
 
 router = APIRouter(tags=["analysis-jobs"])
@@ -265,6 +266,7 @@ def create_analysis_job(
             document.clauses,
             key=lambda clause: clause.ordinal,
         ),
+        provider=create_analysis_provider(),
     )
 
     return {
@@ -313,6 +315,7 @@ def create_extraction_analysis_job(
         db=db,
         job=job,
         clauses=clauses,
+        provider=create_analysis_provider(),
     )
 
     return {
