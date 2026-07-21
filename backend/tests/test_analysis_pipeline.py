@@ -189,8 +189,10 @@ class CustomAnalysisProvider:
         return AnalysisResultData(
             reference_id=clause.reference_id,
             display_label="주의",
-            summary="교체된 provider 결과입니다.",
+            summary="custom provider synthetic result",
             expert_review_recommended=True,
+            expert_review_reason_codes=["critical_severity"],
+            expert_review_summary="요약된 위험이 존재합니다.",
         )
 
 
@@ -241,7 +243,7 @@ def test_run_analysis_pipeline_accepts_custom_provider(
     assert job.result_items[0].display_label == "주의"
     assert (
         job.result_items[0].summary
-        == "교체된 provider 결과입니다."
+        == "custom provider synthetic result"
     )
     assert job.result_items[0].expert_review_recommended is True
 

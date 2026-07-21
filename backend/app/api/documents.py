@@ -58,6 +58,224 @@ def _snapshot_hash(snapshot: list[dict[str, object]]) -> str:
     return calculate_snapshot_hash(snapshot)
 
 
+def _analysis_value(item: AnalysisResultItem) -> dict[str, object]:
+    extra = item.extra_data or {}
+    analysis_value = extra.get("analysis_value")
+    if isinstance(analysis_value, dict):
+        return analysis_value
+    return {}
+
+
+def _analysis_summary_from_items(
+    *,
+    items: list[AnalysisResultItem],
+    current_snapshot_hash: str | None,
+) -> dict[str, object]:
+    severity_order = ["critical", "high", "medium", "low", "info"]
+    action_priority_order = [
+        "before_signing",
+        "negotiate",
+        "clarify",
+        "monitor",
+        "expert_review",
+        "informational",
+    ]
+    severity_rank = {
+        severity: len(severity_order) - idx
+        for idx, severity in enumerate(severity_order)
+    }
+    action_rank = {
+        action: len(action_priority_order) - idx
+        for idx, action in enumerate(action_priority_order)
+    }
+
+    if not items:
+        return {
+            "overall_risk_level": "info",
+            "overall_display_label": "safe",
+            "total_findings": 0,
+            "critical_count": 0,
+            "high_count": 0,
+            "medium_count": 0,
+            "low_count": 0,
+            "info_count": 0,
+            "top_priorities": [],
+            "key_dates": [],
+            "key_amounts": [],
+            "key_obligations": [],
+            "missing_terms_count": 0,
+            "ambiguity_count": 0,
+            "expert_review_recommended": False,
+            "snapshot_version": None,
+            "snapshot_stale": False,
+        }
+
+    severities = [str(_analysis_value(item).get("severity", "info")) for item in items]
+    critical = sum(1 for severity in severities if severity == "critical")
+    high = sum(1 for severity in severities if severity == "high")
+    medium = sum(1 for severity in severities if severity == "medium")
+    low = sum(1 for severity in severities if severity == "low")
+    info = sum(1 for severity in severities if severity == "info")
+
+    if critical:
+        overall_risk = "critical"
+    elif high:
+        overall_risk = "high"
+    elif medium:
+        overall_risk = "medium"
+    elif low:
+        overall_risk = "low"
+    else:
+        overall_risk = "info"
+
+    total_status_count = critical + high + medium + low + info
+    if total_status_count != len(items):
+        raise ValueError("severity count does not match total findings.")
+
+    sorted_priorities = sorted(
+        items,
+        key=lambda item: (
+            severity_rank.get(
+                str(_analysis_value(item).get("severity", "info")),
+                0,
+            ),
+            action_rank.get(
+                str(_analysis_value(item).get("action_priority", "informational")),
+                0,
+            ),
+            str(item.id),
+        ),
+    )
+    top_priorities = [
+        {
+            "finding_id": str(
+                _analysis_value(item).get("finding_id") or item.id
+            ),
+            "severity": str(_analysis_value(item).get("severity", "info")),
+            "title": str(_analysis_value(item).get("title") or item.clause.title or item.id),
+            "action_priority": str(_analysis_value(item).get("action_priority", "informational")),
+        }
+        for item in sorted_priorities[:3]
+    ]
+
+    key_dates: list[str] = []
+    key_amounts: list[str] = []
+    key_obligations: list[str] = []
+    missing_terms_count = 0
+    ambiguity_count = 0
+    for item in items:
+        value = _analysis_value(item)
+        for fact in value.get("extracted_facts", []):
+            if not isinstance(fact, dict):
+                continue
+            fact_type = str(fact.get("fact_type", ""))
+            status = str(fact.get("status", "")).strip().lower()
+            if status == "missing":
+                missing_terms_count += 1
+            elif status == "ambiguous":
+                ambiguity_count += 1
+
+            if fact_type in {"contract_start_date", "contract_end_date", "payment_date", "notice_deadline"}:
+                date_value = str(fact.get("date_value", "")).strip()
+                if date_value:
+                    key_dates.append(date_value)
+            if fact_type in {"payment_amount", "deposit", "penalty", "late_fee", "interest_rate"}:
+                amount_value = str(fact.get("amount_value", "")).strip()
+                if amount_value:
+                    currency = str(fact.get("currency", "")).strip() or "KRW"
+                    key_amounts.append(f"{amount_value} {currency}")
+            if fact_type == "obligation":
+                obligation_party = str(fact.get("obligation_party", "")).strip()
+                if obligation_party:
+                    label = str(fact.get("label", "")).strip()
+                    key_obligations.append(f"{obligation_party}: {label}".strip())
+
+    snapshot_versions = [
+        int(item.extra_data.get("snapshot_version"))
+        for item in items
+        if isinstance(item.extra_data, dict)
+        and isinstance(item.extra_data.get("snapshot_version"), int)
+    ]
+
+    return {
+        "overall_risk_level": overall_risk,
+        "overall_display_label": (
+            "warning" if overall_risk in {"critical", "high"} else "safe"
+        ),
+        "total_findings": len(items),
+        "critical_count": critical,
+        "high_count": high,
+        "medium_count": medium,
+        "low_count": low,
+        "info_count": info,
+        "top_priorities": top_priorities,
+        "key_dates": key_dates,
+        "key_amounts": key_amounts,
+        "key_obligations": key_obligations,
+        "missing_terms_count": missing_terms_count,
+        "ambiguity_count": ambiguity_count,
+        "expert_review_recommended": any(
+            item.expert_review_recommended for item in items
+        ),
+        "snapshot_version": max(snapshot_versions) if snapshot_versions else None,
+        "snapshot_stale": any(
+            _is_snapshot_stale(item=item, current_snapshot_hash=current_snapshot_hash)
+            for item in items
+        ),
+    }
+
+def _is_snapshot_stale(
+    item: AnalysisResultItem,
+    current_snapshot_hash: str | None,
+) -> bool:
+    if current_snapshot_hash is None:
+        return False
+    if not isinstance(item.extra_data, dict):
+        return False
+    evidence_hash = item.extra_data.get("evidence_snapshot_hash")
+    return isinstance(evidence_hash, str) and evidence_hash != current_snapshot_hash
+
+
+def _serialize_analysis_result_item(
+    item: AnalysisResultItem,
+    *,
+    current_snapshot_hash: str | None,
+) -> dict[str, object]:
+    value = _analysis_value(item)
+    return {
+        "clause_id": item.clause.clause_id,
+        "reference_id": item.reference_id,
+        "finding_id": item.id,
+        "display_label": item.display_label,
+        "summary": item.summary,
+        "expert_review_recommended": item.expert_review_recommended,
+        "severity": value.get("severity", "info"),
+        "title": value.get("title") or item.clause.title,
+        "category": value.get("category"),
+        "risk_type": value.get("risk_type"),
+        "risk_reason": value.get("risk_reason"),
+        "practical_impact": value.get("practical_impact"),
+        "action_priority": value.get("action_priority"),
+        "questions_to_ask": value.get("questions_to_ask", []),
+        "negotiation_suggestions": value.get(
+            "negotiation_suggestions",
+            [],
+        ),
+        "recommendation": value.get("recommendation", item.summary),
+        "expert_review_reason_codes": value.get("expert_review_reason_codes", []),
+        "expert_review_summary": value.get("expert_review_summary", ""),
+        "evidence": value.get("evidence", item.extra_data.get("evidence", [])),
+        "extracted_facts": value.get("extracted_facts", []),
+        "validation_status": value.get("validation_status", "verified"),
+        "is_stale": _is_snapshot_stale(item, current_snapshot_hash),
+        "snapshot_version": (
+            item.extra_data.get("snapshot_version")
+            if isinstance(item.extra_data, dict)
+            else None
+        ),
+    }
+
+
 def _get_extraction_snapshot(document_id: str, db: Session) -> list[dict[str, object]]:
     extraction = db.get(Extraction, document_id)
     if extraction is None:
@@ -211,51 +429,26 @@ def get_analysis_results(
         job.result_items,
         key=lambda item: item.clause.ordinal,
     )
-    is_extraction_job = bool(snapshot)
+
+    item_payloads = [
+        _serialize_analysis_result_item(
+            item=item,
+            current_snapshot_hash=current_snapshot_hash,
+        )
+        for item in items
+    ]
+    analysis_summary = _analysis_summary_from_items(
+        items=items,
+        current_snapshot_hash=current_snapshot_hash,
+    )
 
     return {
         "document_id": document_id,
         "job_id": job.id,
         "status": job.status,
         "snapshot_version": extraction_snapshot_version,
-        "snapshot_stale": (
-            is_extraction_job
-            and bool(
-                current_snapshot_hash is not None
-                and items
-                and items[0].extra_data.get("snapshot_version") is not None
-                and current_snapshot_hash != items[0].extra_data.get("evidence_snapshot_hash")
-            )
-        ),
-        "items": [
-            {
-                "clause_id": item.clause.clause_id,
-                "reference_id": item.reference_id,
-                "finding_id": item.id,
-                "display_label": item.display_label,
-                "summary": item.summary,
-                "expert_review_recommended": (
-                    item.expert_review_recommended
-                ),
-                "severity": item.display_label,
-                "title": item.clause.title,
-                "recommendation": item.summary,
-                "evidence": item.extra_data.get("evidence", []),
-                "is_stale": (
-                    bool(
-                        current_snapshot_hash is not None
-                        and item.extra_data.get("evidence_snapshot_hash")
-                        and item.extra_data.get("evidence_snapshot_hash") != current_snapshot_hash
-                    )
-                    if item.extra_data
-                    else False
-                ),
-                "snapshot_version": (
-                    item.extra_data.get("snapshot_version")
-                    if isinstance(item.extra_data, dict)
-                    else None
-                ),
-            }
-            for item in items
-        ],
+        "snapshot_stale": analysis_summary["snapshot_stale"],
+        "analysis_summary": analysis_summary,
+        "items": item_payloads,
+        "findings": item_payloads,
     }
