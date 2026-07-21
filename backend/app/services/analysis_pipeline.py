@@ -14,9 +14,16 @@ from backend.app.db.models import (
     Extraction,
 )
 from backend.app.services.analysis_provider import (
-    DEFAULT_ANALYSIS_PROVIDER,
     AnalysisProvider,
+    DEFAULT_ANALYSIS_PROVIDER,
     AnalysisProviderInput,
+    analysis_result_data_from_provider_response,
+)
+from backend.app.services.analysis_provider_contract import (
+    AnalysisClauseInput,
+    AnalysisProviderRequest,
+    EvidenceCandidateInput,
+    request_to_json_bytes,
 )
 from backend.app.services.analysis_result_schema import AnalysisResultData
 from backend.app.services.evidence_linking import (
@@ -93,7 +100,7 @@ def _normalize_fact_fields(fact: dict[str, object]) -> dict[str, object]:
     )
     if amount_value:
         fact["amount_value"] = amount_value
-        fact["currency"] = fact.get("currency", "KRW") or "KRW"
+        fact["currency"] = fact.get("currency", "") or "KRW"
 
     if fact_type == "obligation":
         obligation_party = str(fact.get("obligation_party", "")).strip()
@@ -109,7 +116,10 @@ def _normalize_date_value(value: str) -> str:
     if not raw:
         return ""
 
-    match = re.match(r"^\s*(\d{4})[.\s년]+\s*(\d{1,2})[.\s월]+\s*(\d{1,2})(?:일)?\s*$", raw)
+    match = re.match(
+        r"^\s*(\d{4})[\.\-/\s년]*(\d{1,2})[\.\-/\s월]*(\d{1,2})(?:일)?\s*$",
+        raw,
+    )
     if match:
         year, month, day = match.groups()
         try:
@@ -286,9 +296,7 @@ def _normalize_suggestion_list(
             {
                 "suggestion_id": str(value.get("suggestion_id", "")),
                 "objective": str(value.get("objective", "")),
-                "suggested_change": str(
-                    value.get("suggested_change", "")
-                ),
+                "suggested_change": str(value.get("suggested_change", "")),
                 "fallback_option": str(value.get("fallback_option", "")),
                 "related_evidence_ids": related_ids,
                 "priority": str(value.get("priority", "normal")),
@@ -448,6 +456,55 @@ def build_provider_input(
     )
 
 
+def build_provider_request(
+    request_id: str,
+    document_id: str,
+    snapshot_version: int,
+    clause: Clause,
+) -> AnalysisProviderRequest:
+    block_ids = [
+        str(block_id)
+        for block_id in (getattr(clause, "block_ids", []) or [])
+        if str(block_id).strip()
+    ]
+    candidate = EvidenceCandidateInput(
+        candidate_id=f"{clause.reference_id}-e001",
+        clause_id=clause.reference_id,
+        page_number=int(getattr(clause, "page_start", 1) or 1),
+        block_ids=block_ids,
+        source_text=(clause.body or "")[:1800],
+        start_offset=int(getattr(clause, "start_offset", 0) or 0),
+        end_offset=int(getattr(clause, "end_offset", 0) or 0),
+        confidence=1.0,
+    )
+
+    clause_input = AnalysisClauseInput(
+        clause_id=clause.clause_id,
+        clause_label=clause.title or clause.clause_id,
+        clause_level=str(getattr(clause, "clause_level", "normal") or "normal"),
+        text=(clause.body or "")[:4000],
+        page_start=getattr(clause, "page_start", None),
+        page_end=getattr(clause, "page_end", None),
+        evidence_candidates=[candidate],
+    )
+
+    request = AnalysisProviderRequest(
+        request_id=request_id,
+        document_id=document_id,
+        snapshot_version=snapshot_version,
+        clauses=[clause_input],
+        safety_context="masked",
+    )
+    request.validate()
+
+    # guard against accidental oversized payloads
+    payload = request_to_json_bytes(request)
+    if len(payload) > 512 * 1024:
+        raise ValueError("provider_request_too_large")
+
+    return request
+
+
 def run_analysis_pipeline(
     db: Session,
     job: AnalysisJob,
@@ -464,16 +521,33 @@ def run_analysis_pipeline(
         job.document_id,
     )
 
+    request_index = 0
     try:
         for clause in clauses:
             validate_reference_id(job.document_id, clause)
 
             provider_input = build_provider_input(clause)
-            result_data = execute_provider(
+            request = build_provider_request(
+                request_id=f"{job.id}:{request_index}",
+                document_id=job.document_id,
+                snapshot_version=(snapshot_version or 1),
+                clause=clause,
+            )
+            request_index += 1
+
+            response = execute_provider(
                 provider,
                 provider_input,
+                request=request,
                 policy=provider_policy,
             )
+            if isinstance(response, AnalysisResultData):
+                result_data = response
+            else:
+                result_data = analysis_result_data_from_provider_response(
+                    provider_input=provider_input,
+                    response=response,
+                )
             result_data.validate()
             validate_result_reference_id(
                 clause,
@@ -547,4 +621,4 @@ def run_analysis_pipeline(
             failed_job.status = "failed"
             db.commit()
 
-        raise
+            raise
