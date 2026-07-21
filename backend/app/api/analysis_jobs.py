@@ -1,4 +1,3 @@
-from hashlib import sha256
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -7,6 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction
+from backend.app.services.clause_splitter import split_clauses_with_snapshot
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 
 
@@ -35,6 +35,8 @@ def _parse_if_match_version(if_match: str | None) -> int:
 
 
 def _snapshot_checksum(items: list[dict[str, object]]) -> str:
+    from hashlib import sha256
+
     hasher = sha256()
     for item in items:
         hasher.update(str(item["final_text"]).encode("utf-8"))
@@ -154,6 +156,11 @@ def _load_or_create_analysis_document(
     document = db.scalar(statement)
     extraction_data = extraction.extra_data or {}
     snapshot = extraction_data["confirmation_snapshot"]
+    split_result = split_clauses_with_snapshot(
+        snapshot,
+        document_id=extraction.id,
+    )
+    clauses_data = split_result["clauses"]
 
     if document is None:
         document = Document(
@@ -169,40 +176,54 @@ def _load_or_create_analysis_document(
         db.add(document)
         db.flush()
 
-        for position, page_data in enumerate(snapshot, start=1):
-            body = str(page_data["final_text"])
+        for clause_data in clauses_data:
+            body = str(clause_data["text"])
             clause = Clause(
                 id=str(uuid4()),
-                clause_id=f"page-{position}",
-                reference_id=f"{document.id}:clause:{position}",
-                source_hash=str(sha256(body.encode("utf-8")).hexdigest()),
-                ordinal=position,
-                marker="page",
-                clause_type="page",
-                title=f"Page {page_data['page_number']}",
+                clause_id=clause_data["clause_id"],
+                reference_id=clause_data["reference_id"],
+                source_hash=clause_data["source_hash"],
+                ordinal=clause_data["ordinal"],
+                marker=clause_data["marker"],
+                clause_type=clause_data["clause_type"],
+                title=clause_data.get("title"),
                 body=body,
-                warnings=list(page_data.get("warnings") or []),
+                warnings=list(clause_data.get("warnings") or []),
             )
+            clause.start_offset = clause_data.get("start_offset")
+            clause.end_offset = clause_data.get("end_offset")
+            clause.page_start = clause_data.get("page_start")
+            clause.page_end = clause_data.get("page_end")
+            clause.block_ids = clause_data.get("block_ids", [])
+            clause.clause_level = clause_data.get("clause_level")
+            clause.split_method = split_result["split_method"]
             document.clauses.append(clause)
         db.flush()
 
         return document.id
 
     if not document.clauses:
-        for position, page_data in enumerate(snapshot, start=1):
-            body = str(page_data["final_text"])
+        for clause_data in clauses_data:
+            body = str(clause_data["text"])
             clause = Clause(
                 id=str(uuid4()),
-                clause_id=f"page-{position}",
-                reference_id=f"{document.id}:clause:{position}",
-                source_hash=str(sha256(body.encode("utf-8")).hexdigest()),
-                ordinal=position,
-                marker="page",
-                clause_type="page",
-                title=f"Page {page_data['page_number']}",
+                clause_id=clause_data["clause_id"],
+                reference_id=clause_data["reference_id"],
+                source_hash=clause_data["source_hash"],
+                ordinal=clause_data["ordinal"],
+                marker=clause_data["marker"],
+                clause_type=clause_data["clause_type"],
+                title=clause_data.get("title"),
                 body=body,
-                warnings=list(page_data.get("warnings") or []),
+                warnings=list(clause_data.get("warnings") or []),
             )
+            clause.start_offset = clause_data.get("start_offset")
+            clause.end_offset = clause_data.get("end_offset")
+            clause.page_start = clause_data.get("page_start")
+            clause.page_end = clause_data.get("page_end")
+            clause.block_ids = clause_data.get("block_ids", [])
+            clause.clause_level = clause_data.get("clause_level")
+            clause.split_method = split_result["split_method"]
             document.clauses.append(clause)
         db.flush()
 

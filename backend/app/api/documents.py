@@ -11,8 +11,10 @@ from backend.app.db.models import (
     AnalysisResultItem,
     Clause,
     Document,
+    Extraction,
 )
 from backend.app.services.clause_splitter import split_clauses
+from backend.app.services.evidence_linking import calculate_snapshot_hash
 
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -50,6 +52,23 @@ def _serialize_document(document: Document) -> dict[str, object]:
         "unclassified_sections": document.unclassified_sections,
         "document_warnings": document.document_warnings,
     }
+
+
+def _snapshot_hash(snapshot: list[dict[str, object]]) -> str:
+    return calculate_snapshot_hash(snapshot)
+
+
+def _get_extraction_snapshot(document_id: str, db: Session) -> list[dict[str, object]]:
+    extraction = db.get(Extraction, document_id)
+    if extraction is None:
+        return []
+
+    extra_data = extraction.extra_data or {}
+    snapshot = extra_data.get("confirmation_snapshot")
+    if not isinstance(snapshot, list):
+        return []
+
+    return [item for item in snapshot if isinstance(item, dict)]
 
 
 @router.post("/upload")
@@ -177,23 +196,64 @@ def get_analysis_results(
             detail="Analysis result not found.",
         )
 
+    extraction = db.get(Extraction, document_id)
+    snapshot = _get_extraction_snapshot(document_id, db)
+    current_snapshot_hash: str | None = (
+        _snapshot_hash(snapshot) if snapshot else None
+    )
+    extraction_snapshot_version = None
+    if extraction is not None:
+        extraction_snapshot_version = (extraction.extra_data or {}).get(
+            "snapshot_version"
+        )
+
     items = sorted(
         job.result_items,
         key=lambda item: item.clause.ordinal,
     )
+    is_extraction_job = bool(snapshot)
 
     return {
         "document_id": document_id,
         "job_id": job.id,
         "status": job.status,
+        "snapshot_version": extraction_snapshot_version,
+        "snapshot_stale": (
+            is_extraction_job
+            and bool(
+                current_snapshot_hash is not None
+                and items
+                and items[0].extra_data.get("snapshot_version") is not None
+                and current_snapshot_hash != items[0].extra_data.get("evidence_snapshot_hash")
+            )
+        ),
         "items": [
             {
                 "clause_id": item.clause.clause_id,
                 "reference_id": item.reference_id,
+                "finding_id": item.id,
                 "display_label": item.display_label,
                 "summary": item.summary,
                 "expert_review_recommended": (
                     item.expert_review_recommended
+                ),
+                "severity": item.display_label,
+                "title": item.clause.title,
+                "recommendation": item.summary,
+                "evidence": item.extra_data.get("evidence", []),
+                "is_stale": (
+                    bool(
+                        current_snapshot_hash is not None
+                        and item.extra_data.get("evidence_snapshot_hash")
+                        and item.extra_data.get("evidence_snapshot_hash") != current_snapshot_hash
+                    )
+                    if item.extra_data
+                    else False
+                ),
+                "snapshot_version": (
+                    item.extra_data.get("snapshot_version")
+                    if isinstance(item.extra_data, dict)
+                    else None
                 ),
             }
             for item in items
