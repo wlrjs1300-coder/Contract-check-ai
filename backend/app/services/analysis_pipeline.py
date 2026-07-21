@@ -1,4 +1,5 @@
 import re
+import hashlib
 from datetime import datetime
 
 
@@ -44,6 +45,108 @@ from backend.app.services.provider_execution import (
     ProviderExecutionPolicy,
     execute_provider,
 )
+
+
+PII_RESIDUAL_REQUEST_ERROR = "provider_residual_pii_detected"
+DATA_MINIMIZATION_ERROR = "provider_data_minimization_failed"
+TOKEN_COLLISION_ERROR = "provider_redaction_token_collision"
+
+
+def _to_provider_document_id(document_id: str) -> str:
+    digest = hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:12]
+    return f"doc-{digest}"
+
+
+def _iter_output_text_fields(result_data: AnalysisResultData) -> list[tuple[str, str]]:
+    fields: list[tuple[str, str]] = [
+        ("title", result_data.title),
+        ("summary", result_data.summary),
+        ("risk_reason", result_data.risk_reason),
+        ("practical_impact", result_data.practical_impact),
+        ("recommendation", result_data.recommendation),
+        ("expert_review_summary", result_data.expert_review_summary),
+    ]
+
+    for question in result_data.questions_to_ask:
+        if not isinstance(question, dict):
+            continue
+        fields.extend(
+            [
+                ("question.question", str(question.get("question", ""))),
+                ("question.purpose", str(question.get("purpose", ""))),
+            ]
+        )
+
+    for suggestion in result_data.negotiation_suggestions:
+        if not isinstance(suggestion, dict):
+            continue
+        fields.extend(
+            [
+                ("suggestion.objective", str(suggestion.get("objective", ""))),
+                ("suggestion.suggested_change", str(suggestion.get("suggested_change", ""))),
+                ("suggestion.fallback_option", str(suggestion.get("fallback_option", ""))),
+            ]
+        )
+
+    for fact in result_data.extracted_facts:
+        if not isinstance(fact, dict):
+            continue
+        fields.extend(
+            [
+                ("fact.label", str(fact.get("label", ""))),
+                ("fact.value", str(fact.get("value", ""))),
+                ("fact.normalized_value", str(fact.get("normalized_value", ""))),
+                ("fact.amount_value", str(fact.get("amount_value", ""))),
+                ("fact.unit", str(fact.get("unit", ""))),
+                ("fact.obligation_party", str(fact.get("obligation_party", ""))),
+                ("fact.status", str(fact.get("status", ""))),
+            ]
+        )
+    return fields
+
+
+def _assert_no_provider_request_residual_pii(request: AnalysisProviderRequest) -> None:
+    path_patterns = (
+        r"(?i)(?:[a-z]:[\\/]|\\\\[^\\n\\s]+)",
+        r"(?i)(?:/[^\\s/]+(?:/[^\\s/]+)+\\.[A-Za-z]{2,5})",
+        r"\b(?:\\.\\.|\\./)",
+    )
+
+    candidate_texts: list[str] = []
+    for clause in request.clauses:
+        candidate_texts.append(str(clause.text))
+        for candidate in clause.evidence_candidates:
+            candidate_texts.append(str(candidate.source_text))
+
+    for pattern in path_patterns:
+        for candidate_text in candidate_texts:
+            if re.search(pattern, candidate_text):
+                raise ValueError(DATA_MINIMIZATION_ERROR)
+
+    for candidate_text in candidate_texts:
+        residual_entities = detect_entities(
+            candidate_text,
+            avoid_preexisting_token_collisions=True,
+        )
+        if residual_entities:
+            raise ValueError(DATA_MINIMIZATION_ERROR)
+
+    residual_entities = detect_entities(
+        str(request.document_id),
+        avoid_preexisting_token_collisions=True,
+    )
+    if residual_entities:
+        raise ValueError(PII_RESIDUAL_REQUEST_ERROR)
+
+
+def _assert_no_output_pii(result_data: AnalysisResultData) -> None:
+    for _, text in _iter_output_text_fields(result_data):
+        residual_entities = detect_entities(
+            text,
+            avoid_preexisting_token_collisions=True,
+        )
+        if residual_entities:
+            raise ValueError("provider_output_pii_detected: output includes personal data.")
 
 
 def _normalize_fact_list(values: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -433,12 +536,16 @@ def validate_result_reference_id(
 
 def build_provider_input(
     clause: Clause,
-) -> AnalysisProviderInput:
+) -> tuple[AnalysisProviderInput, dict[str, object]]:
     masking_result = detect_and_mask(
         clause.body,
         avoid_preexisting_token_collisions=True,
     )
     masked_text = masking_result["masked_text"]
+    if not masking_result.get("token_collision_avoided", True):
+        raise ValueError(
+            f"{TOKEN_COLLISION_ERROR}: token collision detected in masking result."
+        )
 
     residual_entities = detect_entities(
         masked_text,
@@ -447,12 +554,15 @@ def build_provider_input(
 
     if residual_entities:
         raise ValueError(
-            "Residual personal data remains after masking."
+            f"{DATA_MINIMIZATION_ERROR}: residual personal data remains after masking."
         )
 
-    return AnalysisProviderInput(
-        reference_id=clause.reference_id,
-        masked_text=masked_text,
+    return (
+        AnalysisProviderInput(
+            reference_id=clause.reference_id,
+            masked_text=masked_text,
+        ),
+        masking_result,
     )
 
 
@@ -461,6 +571,7 @@ def build_provider_request(
     document_id: str,
     snapshot_version: int,
     clause: Clause,
+    masked_text: str,
 ) -> AnalysisProviderRequest:
     block_ids = [
         str(block_id)
@@ -472,9 +583,9 @@ def build_provider_request(
         clause_id=clause.reference_id,
         page_number=int(getattr(clause, "page_start", 1) or 1),
         block_ids=block_ids,
-        source_text=(clause.body or "")[:1800],
-        start_offset=int(getattr(clause, "start_offset", 0) or 0),
-        end_offset=int(getattr(clause, "end_offset", 0) or 0),
+        source_text=masked_text[:1800],
+        start_offset=0,
+        end_offset=0,
         confidence=1.0,
     )
 
@@ -482,7 +593,7 @@ def build_provider_request(
         clause_id=clause.clause_id,
         clause_label=clause.title or clause.clause_id,
         clause_level=str(getattr(clause, "clause_level", "normal") or "normal"),
-        text=(clause.body or "")[:4000],
+        text=masked_text[:4000],
         page_start=getattr(clause, "page_start", None),
         page_end=getattr(clause, "page_end", None),
         evidence_candidates=[candidate],
@@ -490,10 +601,12 @@ def build_provider_request(
 
     request = AnalysisProviderRequest(
         request_id=request_id,
-        document_id=document_id,
+        document_id=_to_provider_document_id(document_id),
         snapshot_version=snapshot_version,
         clauses=[clause_input],
         safety_context="masked",
+        page_ranges=[(1, 1)] if getattr(clause, "page_start", None) else [],
+        limits={"max_chars_per_request": len(masked_text)},
     )
     request.validate()
 
@@ -502,6 +615,7 @@ def build_provider_request(
     if len(payload) > 512 * 1024:
         raise ValueError("provider_request_too_large")
 
+    _assert_no_provider_request_residual_pii(request)
     return request
 
 
@@ -525,13 +639,13 @@ def run_analysis_pipeline(
     try:
         for clause in clauses:
             validate_reference_id(job.document_id, clause)
-
-            provider_input = build_provider_input(clause)
+            provider_input, _masking_result = build_provider_input(clause)
             request = build_provider_request(
                 request_id=f"{job.id}:{request_index}",
                 document_id=job.document_id,
                 snapshot_version=(snapshot_version or 1),
                 clause=clause,
+                masked_text=provider_input.masked_text,
             )
             request_index += 1
 
@@ -554,15 +668,7 @@ def run_analysis_pipeline(
                 result_data.reference_id,
             )
 
-            regenerated_pii = detect_entities(
-                result_data.summary,
-                avoid_preexisting_token_collisions=True,
-            )
-
-            if regenerated_pii:
-                raise ValueError(
-                    "Provider result summary contains regenerated personal data."
-                )
+            _assert_no_output_pii(result_data)
 
             output_safety = check_summary_output(
                 result_data.summary,
