@@ -642,6 +642,108 @@ def test_target_file_open_failure_is_safe_and_cleans_request_directory(
     assert db_session.scalar(select(func.count(Extraction.id))) == 0
 
 
+def test_pdf_lease_refresh_failure_cleans_request_directory_and_creates_no_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    temp_root = tmp_path / "uploads"
+    monkeypatch.setenv("EXTRACTION_TEMP_ROOT", str(temp_root))
+    real_create = extractions_api.create_request_directory
+    captured: dict[str, RequestDirectory] = {}
+
+    def capture_request_directory() -> RequestDirectory:
+        request_directory = real_create()
+        captured["request"] = request_directory
+        return request_directory
+
+    monkeypatch.setattr(extractions_api, "create_request_directory", capture_request_directory)
+
+    filename = "private-lease-refresh.pdf"
+    raw_error = "synthetic-lease-refresh-failed"
+
+    def fail_lease_refresh(request_directory: RequestDirectory) -> RequestDirectory:
+        captured["request"] = request_directory
+        raise OriginalCleanupError(raw_error)
+
+    monkeypatch.setattr(extractions_api, "refresh_request_directory_lease", fail_lease_refresh)
+
+    response = _post_pdf(
+        _synthetic_text_pdf(["정책을 확인하는 회귀 문장입니다."]),
+        filename=filename,
+    )
+    detail = response.json()["detail"]
+
+    assert response.status_code == 500
+    assert detail["code"] == "temporary_storage_unavailable"
+    assert detail["message"] == "Temporary storage lease renewal failed."
+    assert detail["retryable"] is True
+    assert filename not in response.text
+    assert str(temp_root.resolve()) not in response.text
+    assert raw_error not in response.text
+    assert db_session.scalar(select(func.count(Extraction.id))) == 0
+    assert not captured["request"].path.exists()
+    assert list(temp_root.iterdir()) == []
+
+
+def test_pdf_cleanup_failure_takes_priority_over_lease_refresh_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    temp_root = tmp_path / "uploads"
+    monkeypatch.setenv("EXTRACTION_TEMP_ROOT", str(temp_root))
+    real_create = extractions_api.create_request_directory
+    real_rmtree = extraction_temp_files.shutil.rmtree
+    captured: dict[str, RequestDirectory] = {}
+
+    def capture_request_directory() -> RequestDirectory:
+        request_directory = real_create()
+        captured["request"] = request_directory
+        return request_directory
+
+    lease_raw_error = "synthetic-lease-refresh-failed"
+    cleanup_raw_error = "synthetic-cleanup-failed"
+
+    def fail_lease_refresh(_request_directory: RequestDirectory) -> RequestDirectory:
+        raise OriginalCleanupError(lease_raw_error)
+
+    def fail_cleanup(_path: Path) -> None:
+        raise PermissionError(cleanup_raw_error)
+
+    monkeypatch.setattr(extractions_api, "create_request_directory", capture_request_directory)
+    monkeypatch.setattr(extractions_api, "refresh_request_directory_lease", fail_lease_refresh)
+    monkeypatch.setattr(extraction_temp_files.shutil, "rmtree", fail_cleanup)
+    filename = "private-cleanup-priority.pdf"
+    request_directory: RequestDirectory | None = None
+    try:
+        response = _post_pdf(
+            _synthetic_text_pdf(["정책을 확인하는 회귀 문장입니다."]),
+            filename=filename,
+        )
+        request_directory = captured["request"]
+        detail = response.json()["detail"]
+
+        assert response.status_code == 500
+        assert detail["code"] == "original_cleanup_failed"
+        assert detail["message"] == "The uploaded file could not be safely removed."
+        assert filename not in response.text
+        assert str(temp_root.resolve()) not in response.text
+        assert lease_raw_error not in response.text
+        assert cleanup_raw_error not in response.text
+        assert request_directory.path.exists()
+        assert db_session.scalar(select(func.count(Extraction.id))) == 0
+    finally:
+        monkeypatch.setattr(extraction_temp_files.shutil, "rmtree", real_rmtree)
+        request_directory = request_directory or captured.get("request")
+        if request_directory is not None and request_directory.path.exists():
+            cleanup_request_directory(request_directory)
+
+    assert request_directory is not None
+    assert not request_directory.path.exists()
+    assert list(temp_root.iterdir()) == []
+
+
 def test_real_rmtree_failure_leaves_marker_and_blocks_database_record(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

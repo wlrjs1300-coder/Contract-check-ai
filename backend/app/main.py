@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI
@@ -9,6 +10,8 @@ from backend.app.api.documents import router as documents_router
 from backend.app.api.extractions import router as extractions_router
 from backend.app.db import models as _models  # noqa: F401
 from backend.app.db.database import Base, engine
+from backend.app.services.extraction_orphan_cleanup import OrphanCleanupError
+from backend.app.services.extraction_orphan_cleanup import sweep_orphan_request_directories
 
 
 Base.metadata.create_all(bind=engine)
@@ -52,9 +55,28 @@ def parse_cors_allowed_origins(value: str | None = None) -> list[str]:
     return list(dict.fromkeys(origins))
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # noqa: ARG001
+    try:
+        sweep_result = sweep_orphan_request_directories()
+    except OrphanCleanupError:
+        raise
+    app.state.orphan_cleanup = {
+        "scanned_count": sweep_result.scanned_count,
+        "eligible_count": sweep_result.eligible_count,
+        "removed_count": sweep_result.removed_count,
+        "skipped_active_count": sweep_result.skipped_active_count,
+        "skipped_unsafe_count": sweep_result.skipped_unsafe_count,
+        "failed_count": sweep_result.failed_count,
+        "status_codes": dict(sweep_result.status_codes),
+    }
+    yield
+
+
 app = FastAPI(
     title="ContractCheck AI API",
     version="0.6.1",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
