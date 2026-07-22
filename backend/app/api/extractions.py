@@ -55,6 +55,7 @@ from backend.app.services.extraction_temp_files import (
     UploadSizeLimitExceededError,
     cleanup_request_directory,
     create_request_directory,
+    refresh_request_directory_lease,
     create_server_file_path,
     write_upload_to_temp,
 )
@@ -224,6 +225,17 @@ def _build_review_summary(
         "blocking_reasons": blocking_reasons,
         "extraction_review_status": extraction_review_status,
     }
+
+
+class _LeaseRefreshError(RuntimeError):
+    """임시 저장소 Lease 갱신 실패."""
+
+
+def _refresh_lease_or_fail(request_directory: RequestDirectory) -> RequestDirectory:
+    try:
+        return refresh_request_directory_lease(request_directory)
+    except OriginalCleanupError as exc:
+        raise _LeaseRefreshError from exc
 
 
 def _serialize_extraction(extraction: Extraction) -> ExtractionResponse:
@@ -449,6 +461,7 @@ def _process_pdf_pages(
         if page.classification != PDF_PAGE_CLASSIFICATION_DIRECT_USABLE:
             page_review_required = True
             should_ocr = True
+            request_directory = _refresh_lease_or_fail(request_directory)
 
             if should_ocr:
                 try:
@@ -639,6 +652,7 @@ async def create_extraction(
             source_path,
             max_size_bytes=MAX_PDF_SIZE_BYTES,
         )
+        request_directory = _refresh_lease_or_fail(request_directory)
 
         if size_bytes == 0:
             raise PDFExtractionError(
@@ -681,6 +695,15 @@ async def create_extraction(
                 "The uploaded file could not be safely removed.",
             ),
         ) from exc
+    except _LeaseRefreshError:
+        pending_error = HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "temporary_storage_unavailable",
+                "Temporary storage lease renewal failed.",
+                retryable=True,
+            ),
+        )
     except (OSError, RuntimeError):
         pending_error = HTTPException(
             status_code=500,
@@ -867,6 +890,7 @@ async def create_image_extraction(
                     status_code=413,
                 )
             source_paths.append(source_path)
+            request_directory = _refresh_lease_or_fail(request_directory)
 
         prepared_images = [
             prepare_image(
@@ -879,6 +903,7 @@ async def create_image_extraction(
                 start=1,
             )
         ]
+        request_directory = _refresh_lease_or_fail(request_directory)
         extracted_images = extract_images(prepared_images, ocr_adapter)
     except ImageExtractionError as exc:
         pending_error = HTTPException(
@@ -897,6 +922,15 @@ async def create_image_extraction(
                 "The uploaded files could not be safely removed.",
             ),
         ) from exc
+    except _LeaseRefreshError:
+        pending_error = HTTPException(
+            status_code=500,
+            detail=_image_error_detail(
+                "temporary_storage_unavailable",
+                "Temporary storage lease renewal failed.",
+                retryable=True,
+            ),
+        )
     except (OSError, RuntimeError, ValueError):
         pending_error = HTTPException(
             status_code=500,
