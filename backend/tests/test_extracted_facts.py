@@ -9,12 +9,14 @@ from backend.app.services.analysis_result_schema import (
     ALLOWED_EXPERT_REVIEW_CODES,
     AnalysisResultData,
 )
+from backend.tests.support import TEST_USER_ID
 
 
 def _create_document_and_clause(db_session, body: str):
     document_id = str(uuid4())
     document = Document(
         id=document_id,
+        owner_id=TEST_USER_ID,
         filename="facts.txt",
         content_type="text/plain",
         size_bytes=len(body),

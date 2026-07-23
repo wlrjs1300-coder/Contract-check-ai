@@ -8,13 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.analysis_jobs import router as analysis_jobs_router
 from backend.app.api.documents import router as documents_router
 from backend.app.api.extractions import router as extractions_router
+from backend.app.api.auth import router as auth_router
 from backend.app.db import models as _models  # noqa: F401
-from backend.app.db.database import Base, engine
+from backend.app.core.config import get_jwt_config
 from backend.app.services.extraction_orphan_cleanup import OrphanCleanupError
 from backend.app.services.extraction_orphan_cleanup import sweep_orphan_request_directories
-
-
-Base.metadata.create_all(bind=engine)
 
 
 DEFAULT_CORS_ALLOWED_ORIGINS = "http://localhost:5173"
@@ -57,6 +55,7 @@ def parse_cors_allowed_origins(value: str | None = None) -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
+    app.state.jwt_config = get_jwt_config()
     try:
         sweep_result = sweep_orphan_request_directories()
     except OrphanCleanupError:
@@ -75,7 +74,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
 
 app = FastAPI(
     title="ContractCheck AI API",
-    version="0.6.1",
+    version="0.7.4",
     lifespan=lifespan,
 )
 
@@ -83,10 +82,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=parse_cors_allowed_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Accept", "Content-Type"],
+    allow_methods=["GET", "POST", "PATCH"],
+    allow_headers=["Accept", "Content-Type", "Authorization", "If-Match"],
 )
 
+app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(analysis_jobs_router)
 app.include_router(extractions_router)

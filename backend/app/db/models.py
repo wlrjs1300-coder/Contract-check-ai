@@ -3,19 +3,34 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import (
-    Boolean,
-    DateTime,
-    ForeignKey,
-    Integer,
-    JSON,
-    String,
-    Text,
-    UniqueConstraint,
-)
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.db.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    auth_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    __table_args__ = (CheckConstraint("auth_version >= 1", name="ck_users_auth_version_positive"),)
+
+    documents: Mapped[list["Document"]] = relationship(back_populates="owner")
+    extractions: Mapped[list["Extraction"]] = relationship(back_populates="owner")
 
 
 class Document(Base):
@@ -27,27 +42,25 @@ class Document(Base):
     size_bytes: Mapped[int] = mapped_column(Integer)
     character_count: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(50))
-    unclassified_sections: Mapped[list[str]] = mapped_column(
-        JSON,
-        default=list,
+    unclassified_sections: Mapped[list[str]] = mapped_column(JSON, default=list)
+    document_warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    owner_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
     )
-    document_warnings: Mapped[list[str]] = mapped_column(
-        JSON,
-        default=list,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    clauses: Mapped[list[Clause]] = relationship(
+    clauses: Mapped[list["Clause"]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
     )
-    analysis_jobs: Mapped[list[AnalysisJob]] = relationship(
+    analysis_jobs: Mapped[list["AnalysisJob"]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
     )
+    owner: Mapped[User] = relationship(back_populates="documents")
 
 
 class Clause(Base):
@@ -77,13 +90,10 @@ class Clause(Base):
     clause_type: Mapped[str] = mapped_column(String(50))
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     body: Mapped[str] = mapped_column(Text)
-    warnings: Mapped[list[str]] = mapped_column(
-        JSON,
-        default=list,
-    )
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
 
     document: Mapped[Document] = relationship(back_populates="clauses")
-    analysis_result_items: Mapped[list[AnalysisResultItem]] = relationship(
+    analysis_result_items: Mapped[list["AnalysisResultItem"]] = relationship(
         back_populates="clause",
         cascade="all, delete-orphan",
     )
@@ -98,15 +108,10 @@ class AnalysisJob(Base):
         index=True,
     )
     status: Mapped[str] = mapped_column(String(50))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    document: Mapped[Document] = relationship(
-        back_populates="analysis_jobs",
-    )
-    result_items: Mapped[list[AnalysisResultItem]] = relationship(
+    document: Mapped[Document] = relationship(back_populates="analysis_jobs")
+    result_items: Mapped[list["AnalysisResultItem"]] = relationship(
         back_populates="analysis_job",
         cascade="all, delete-orphan",
     )
@@ -115,11 +120,7 @@ class AnalysisJob(Base):
 class AnalysisResultItem(Base):
     __tablename__ = "analysis_result_items"
 
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     analysis_job_id: Mapped[str] = mapped_column(
         ForeignKey("analysis_jobs.id", ondelete="CASCADE"),
         index=True,
@@ -131,21 +132,11 @@ class AnalysisResultItem(Base):
     reference_id: Mapped[str] = mapped_column(String(100), index=True)
     display_label: Mapped[str] = mapped_column(String(50))
     summary: Mapped[str] = mapped_column(Text)
-    expert_review_recommended: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-    )
-    extra_data: Mapped[dict[str, Any]] = mapped_column(
-        JSON,
-        default=dict,
-    )
+    expert_review_recommended: Mapped[bool] = mapped_column(Boolean, default=False)
+    extra_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
-    analysis_job: Mapped[AnalysisJob] = relationship(
-        back_populates="result_items",
-    )
-    clause: Mapped[Clause] = relationship(
-        back_populates="analysis_result_items",
-    )
+    analysis_job: Mapped[AnalysisJob] = relationship(back_populates="result_items")
+    clause: Mapped[Clause] = relationship(back_populates="analysis_result_items")
 
 
 class Extraction(Base):
@@ -159,23 +150,21 @@ class Extraction(Base):
     status: Mapped[str] = mapped_column(String(50))
     method: Mapped[str] = mapped_column(String(20))
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
-    requires_user_review: Mapped[bool] = mapped_column(
-        Boolean,
-        default=True,
+    requires_user_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    extra_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    owner_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
     )
-    extra_data: Mapped[dict[str, Any]] = mapped_column(
-        JSON,
-        default=dict,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    pages: Mapped[list[ExtractionPage]] = relationship(
+    pages: Mapped[list["ExtractionPage"]] = relationship(
         back_populates="extraction",
         cascade="all, delete-orphan",
     )
+    owner: Mapped[User] = relationship(back_populates="extractions")
 
 
 class ExtractionPage(Base):
@@ -188,11 +177,7 @@ class ExtractionPage(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     extraction_id: Mapped[str] = mapped_column(
         ForeignKey("extractions.id", ondelete="CASCADE"),
         index=True,
@@ -201,13 +186,7 @@ class ExtractionPage(Base):
     method: Mapped[str] = mapped_column(String(20))
     text: Mapped[str] = mapped_column(Text)
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
-    requires_user_review: Mapped[bool] = mapped_column(
-        Boolean,
-        default=True,
-    )
-    extra_data: Mapped[dict[str, Any]] = mapped_column(
-        JSON,
-        default=dict,
-    )
+    requires_user_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    extra_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     extraction: Mapped[Extraction] = relationship(back_populates="pages")

@@ -1,11 +1,13 @@
-﻿from uuid import uuid4
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
-from backend.app.db.models import AnalysisJob, Clause, Document, Extraction
+from backend.app.core.auth import get_current_user
+from backend.app.db.models import AnalysisJob, Clause, Document, Extraction, User
 from backend.app.services.clause_splitter import split_clauses_with_snapshot
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.analysis_provider_factory import create_analysis_provider
@@ -48,13 +50,17 @@ def _snapshot_checksum(items: list[dict[str, object]]) -> str:
 def _get_extraction_ready_for_analysis(
     extraction_id: str,
     db: Session,
+    current_user: User,
     *,
     if_match: str | None,
 ) -> Extraction:
     statement = (
         select(Extraction)
         .options(selectinload(Extraction.pages))
-        .where(Extraction.id == extraction_id)
+        .where(
+            Extraction.id == extraction_id,
+            Extraction.owner_id == current_user.id,
+        )
     )
     extraction = db.scalar(statement)
 
@@ -152,20 +158,38 @@ def _get_extraction_ready_for_analysis(
 def _load_or_create_analysis_document(
     db: Session,
     extraction: Extraction,
+    current_user_id: str,
 ) -> str:
-    statement = select(Document).where(Document.id == extraction.id)
-    document = db.scalar(statement)
-    extraction_data = extraction.extra_data or {}
-    snapshot = extraction_data["confirmation_snapshot"]
-    split_result = split_clauses_with_snapshot(
-        snapshot,
-        document_id=extraction.id,
+    statement = (
+        select(Document)
+        .options(selectinload(Document.clauses))
+        .where(Document.id == extraction.id)
     )
-    clauses_data = split_result["clauses"]
+    document = db.scalar(statement)
+    if document is not None and document.owner_id != current_user_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
 
     if document is None:
+        extraction_data = extraction.extra_data or {}
+        snapshot = extraction_data["confirmation_snapshot"]
+        if not isinstance(snapshot, list) or not snapshot:
+            raise HTTPException(
+                status_code=409,
+                detail="invalid_confirmation_snapshot",
+            )
+
+        split_result = split_clauses_with_snapshot(
+            snapshot,
+            document_id=extraction.id,
+        )
+        clauses_data = split_result["clauses"]
+
         document = Document(
             id=extraction.id,
+            owner_id=current_user_id,
             filename=extraction.filename_display,
             content_type=extraction.source_type,
             size_bytes=extraction.size_bytes,
@@ -175,7 +199,14 @@ def _load_or_create_analysis_document(
             document_warnings=extraction.warnings,
         )
         db.add(document)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=404,
+                detail="Document not found.",
+            ) from exc
 
         for clause_data in clauses_data:
             body = str(clause_data["text"])
@@ -200,8 +231,15 @@ def _load_or_create_analysis_document(
             clause.split_method = split_result["split_method"]
             document.clauses.append(clause)
         db.flush()
-
         return document.id
+
+    extraction_data = extraction.extra_data or {}
+    snapshot = extraction_data["confirmation_snapshot"]
+    split_result = split_clauses_with_snapshot(
+        snapshot,
+        document_id=extraction.id,
+    )
+    clauses_data = split_result["clauses"]
 
     if not document.clauses:
         for clause_data in clauses_data:
@@ -235,11 +273,15 @@ def _load_or_create_analysis_document(
 def create_analysis_job(
     document_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
     statement = (
         select(Document)
         .options(selectinload(Document.clauses))
-        .where(Document.id == document_id)
+        .where(
+            Document.id == document_id,
+            Document.owner_id == current_user.id,
+        )
     )
     document = db.scalar(statement)
 
@@ -281,17 +323,23 @@ def create_extraction_analysis_job(
     extraction_id: str,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
     extraction = _get_extraction_ready_for_analysis(
         extraction_id,
         db,
+        current_user,
         if_match=if_match,
     )
 
-    document_id = _load_or_create_analysis_document(db, extraction)
+    document_id = _load_or_create_analysis_document(
+        db,
+        extraction,
+        current_user.id,
+    )
     statement = (
         select(Clause)
-        .where(Clause.reference_id.like(f"{document_id}:clause:%"))
+        .where(Clause.document_id == document_id)
         .order_by(Clause.ordinal)
     )
     clauses = db.scalars(statement).all()
@@ -329,8 +377,17 @@ def create_extraction_analysis_job(
 def get_analysis_job(
     job_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    job = db.get(AnalysisJob, job_id)
+    statement = (
+        select(AnalysisJob)
+        .join(Document)
+        .where(
+            AnalysisJob.id == job_id,
+            Document.owner_id == current_user.id,
+        )
+    )
+    job = db.scalar(statement)
 
     if job is None:
         raise HTTPException(

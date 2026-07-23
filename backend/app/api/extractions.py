@@ -21,7 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
+from backend.app.core.auth import get_current_user
 from backend.app.db.models import Extraction, ExtractionPage
+from backend.app.db.models import User
 from backend.app.schemas.extractions import (
     ExtractionErrorResponse,
     ExtractionReviewPageResponse,
@@ -312,11 +314,15 @@ def _serialize_extraction(extraction: Extraction) -> ExtractionResponse:
 def _get_extraction_with_pages(
     extraction_id: str,
     db: Session,
+    current_user: User,
 ) -> Extraction:
     statement = (
         select(Extraction)
         .options(selectinload(Extraction.pages))
-        .where(Extraction.id == extraction_id)
+        .where(
+            Extraction.id == extraction_id,
+            Extraction.owner_id == current_user.id,
+        )
     )
     extraction = db.scalar(statement)
 
@@ -613,6 +619,7 @@ def _process_pdf_pages(
 async def create_extraction(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     ocr_adapter: OcrAdapter = Depends(get_ocr_adapter),
     pdf_renderer: PdfPageRenderer = Depends(get_pdf_renderer),
 ) -> ExtractionResponse:
@@ -756,6 +763,7 @@ async def create_extraction(
 
     extraction = Extraction(
         id=str(uuid4()),
+        owner_id=current_user.id,
         filename_display=_safe_filename_display(filename),
         source_type="pdf",
         size_bytes=size_bytes,
@@ -825,6 +833,7 @@ async def create_extraction(
 async def create_image_extraction(
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     ocr_adapter: OcrAdapter = Depends(get_ocr_adapter),
 ) -> ExtractionResponse:
     if not files or len(files) > MAX_IMAGE_COUNT:
@@ -967,6 +976,7 @@ async def create_image_extraction(
 
     extraction = Extraction(
         id=str(uuid4()),
+        owner_id=current_user.id,
         filename_display="image-upload",
         source_type="image",
         size_bytes=total_size_bytes,
@@ -1045,8 +1055,13 @@ async def create_image_extraction(
 def get_extraction(
     extraction_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ExtractionResponse:
-    extraction = _get_extraction_with_pages(extraction_id, db)
+    extraction = _get_extraction_with_pages(
+        extraction_id=extraction_id,
+        db=db,
+        current_user=current_user,
+    )
     return _serialize_extraction(extraction)
 
 
@@ -1058,8 +1073,13 @@ def get_extraction(
 def get_extraction_review(
     extraction_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ExtractionReviewResponse:
-    extraction = _get_extraction_with_pages(extraction_id, db)
+    extraction = _get_extraction_with_pages(
+        extraction_id=extraction_id,
+        db=db,
+        current_user=current_user,
+    )
     summary = _build_review_summary(extraction)
     extraction_data = extraction.extra_data or {}
 
@@ -1299,9 +1319,14 @@ def patch_extraction_page_review(
     page_id: str,
     payload: PageReviewPatchRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> ExtractionReviewPageResponse:
-    extraction = _get_extraction_with_pages(extraction_id, db)
+    extraction = _get_extraction_with_pages(
+        extraction_id=extraction_id,
+        db=db,
+        current_user=current_user,
+    )
     if extraction.status == "confirmed":
         raise HTTPException(
             status_code=409,
@@ -1468,8 +1493,13 @@ def confirm_extraction(
     extraction_id: str,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ExtractionConfirmationResponse:
-    extraction = _get_extraction_with_pages(extraction_id, db)
+    extraction = _get_extraction_with_pages(
+        extraction_id=extraction_id,
+        db=db,
+        current_user=current_user,
+    )
     request_version = int(
         extraction.extra_data.get("review_version", 1)
         if extraction.extra_data is not None
