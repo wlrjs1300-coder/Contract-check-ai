@@ -23,9 +23,10 @@ from sqlalchemy import (
 from sqlalchemy import Column, Index, Table
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects import sqlite as sqlite_dialect
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 
-from backend.app.db.database import Base
+from backend.app.db.database import Base, enable_sqlite_foreign_keys
 from backend.app.db import models  # noqa: F401
 
 
@@ -45,14 +46,7 @@ def _load_alembic_config(database_url: str) -> Config:
 
 def _engine(database_url: str) -> Engine:
     eng = create_engine(database_url, connect_args={"check_same_thread": False}, poolclass=StaticPool)
-
-    @event.listens_for(eng, "connect")
-    def _enable_foreign_keys(dbapi_connection, _connection_record):
-        cursor = dbapi_connection.cursor()
-        try:
-            cursor.execute("PRAGMA foreign_keys=ON")
-        finally:
-            cursor.close()
+    event.listen(eng, "connect", enable_sqlite_foreign_keys)
 
     return eng
 
@@ -383,6 +377,63 @@ def test_sqlite_foreign_keys_enabled() -> None:
             assert int(conn.execute(text("PRAGMA foreign_keys")).scalar_one()) == 1
     finally:
         eng.dispose()
+
+
+def test_shared_test_engine_enforces_sqlite_foreign_keys(sqlite_test_engine) -> None:
+    with sqlite_test_engine.connect() as conn:
+        assert int(conn.execute(text("PRAGMA foreign_keys")).scalar_one()) == 1
+
+
+def test_shared_test_engine_rejects_orphan_owner(sqlite_test_engine) -> None:
+    with pytest.raises(IntegrityError):
+        with sqlite_test_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO extractions (
+                        id,
+                        filename_display,
+                        source_type,
+                        size_bytes,
+                        page_count,
+                        status,
+                        method,
+                        warnings,
+                        requires_user_review,
+                        extra_data,
+                        created_at,
+                        owner_id
+                    ) VALUES (
+                        :id,
+                        :filename_display,
+                        :source_type,
+                        :size_bytes,
+                        :page_count,
+                        :status,
+                        :method,
+                        :warnings,
+                        :requires_user_review,
+                        :extra_data,
+                        :created_at,
+                        :owner_id
+                    )
+                    """
+                ),
+                {
+                    "id": "00000000-0000-4000-8000-0000000000fe",
+                    "filename_display": "orphan.txt",
+                    "source_type": "text",
+                    "size_bytes": 1,
+                    "page_count": 1,
+                    "status": "uploaded",
+                    "method": "direct",
+                    "warnings": "{}",
+                    "requires_user_review": 0,
+                    "extra_data": "{}",
+                    "created_at": "2026-01-01 00:00:00",
+                    "owner_id": "00000000-0000-4000-8000-00000000ffff",
+                },
+            )
 
 
 def test_migration_0001_parity_with_expected_v0733_schema(tmp_path: Path, monkeypatch) -> None:

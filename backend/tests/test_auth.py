@@ -76,22 +76,56 @@ def _login_user(client: TestClient, email: str, password: str):
     return client.post("/auth/login", json={"email": email, "password": password})
 
 
-def test_jwt_config_validation_and_app_state_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lifespan_does_not_store_jwt_secret_in_app_state(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not hasattr(app.state, "jwt_config")
     assert not hasattr(app.state, "jwt_secret")
     assert not hasattr(app.state, "secret")
 
-    monkeypatch.delenv("JWT_SECRET", raising=False)
-    with pytest.raises(AuthConfigurationError):
-        get_jwt_config()
+    with TestClient(app) as client:
+        assert not hasattr(app.state, "jwt_config")
+        assert not hasattr(app.state, "jwt_secret")
+        assert not hasattr(app.state, "secret")
+        assert hasattr(app.state, "orphan_cleanup")
+        assert client.get("/health").status_code == 200
 
-    monkeypatch.setenv("JWT_SECRET", "   ")
-    with pytest.raises(AuthConfigurationError):
-        get_jwt_config()
+    assert not hasattr(app.state, "jwt_config")
+    assert not hasattr(app.state, "jwt_secret")
+    assert not hasattr(app.state, "secret")
 
-    monkeypatch.setenv("JWT_SECRET", "x" * 31)
-    with pytest.raises(AuthConfigurationError):
-        get_jwt_config()
+    with pytest.raises(AuthConfigurationError) as no_secret_error:
+        monkeypatch.delenv("JWT_SECRET", raising=False)
+        with TestClient(app):
+            pass
+    assert "x" * 64 not in str(no_secret_error.value)
+
+    with pytest.raises(AuthConfigurationError) as blank_secret_error:
+        monkeypatch.setenv("JWT_SECRET", "   ")
+        with TestClient(app):
+            pass
+    assert "   " not in str(blank_secret_error.value)
+
+    monkeypatch.setenv("JWT_SECRET", "x" * 64)
+    with TestClient(app):
+        pass
+
+    with pytest.raises(AuthConfigurationError) as short_secret_error:
+        monkeypatch.setenv("JWT_SECRET", "x" * 31)
+        with TestClient(app):
+            pass
+    assert "x" * 31 not in str(short_secret_error.value)
+
+    with pytest.raises(AuthConfigurationError) as invalid_ttl_error:
+        monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "4")
+        monkeypatch.setenv("JWT_SECRET", "x" * 64)
+        with TestClient(app):
+            pass
+
+    with pytest.raises(AuthConfigurationError) as high_ttl_error:
+        monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "61")
+        monkeypatch.setenv("JWT_SECRET", "x" * 64)
+        with TestClient(app):
+            pass
+    assert str(invalid_ttl_error.value) == str(high_ttl_error.value)
 
     def _null_secret(name: str, default: str | None = None) -> str:
         if name == "JWT_SECRET":
