@@ -55,7 +55,7 @@ def parse_cors_allowed_origins(value: str | None = None) -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
-    app.state.jwt_config = get_jwt_config()
+    get_jwt_config()
     try:
         sweep_result = sweep_orphan_request_directories()
     except OrphanCleanupError:

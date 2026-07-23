@@ -13,7 +13,7 @@ DATABASE_URL = os.getenv(
 )
 
 
-def _enable_sqlite_foreign_keys(
+def enable_sqlite_foreign_keys(
     dbapi_connection: object,
     _connection_record: object,
 ) -> None:
@@ -36,7 +36,7 @@ engine = create_engine(
 )
 
 if DATABASE_URL.startswith("sqlite"):
-    event.listen(engine, "connect", _enable_sqlite_foreign_keys)
+    event.listen(engine, "connect", enable_sqlite_foreign_keys)
 
 SessionLocal = sessionmaker(
     bind=engine,

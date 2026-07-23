@@ -2,21 +2,24 @@ from __future__ import annotations
 
 import os
 
+os.environ.setdefault("JWT_SECRET", "x" * 64)
+os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15")
+
 import pytest
 from fastapi import Depends
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.tests.support import TEST_USER_ID
 from backend.app.core.auth import get_current_user, hash_password
-from backend.app.db.database import Base, get_db
+from backend.app.db.database import (
+    Base,
+    enable_sqlite_foreign_keys,
+    get_db,
+)
 from backend.app.db.models import User
 from backend.app.main import app
-
-
-os.environ.setdefault("JWT_SECRET", "x" * 64)
-os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15")
 
 TEST_DATABASE_URL = "sqlite://"
 TEST_USER_EMAIL = "integration-user@example.invalid"
@@ -27,6 +30,7 @@ test_engine = create_engine(
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
+event.listen(test_engine, "connect", enable_sqlite_foreign_keys)
 
 TestingSessionLocal = sessionmaker(
     bind=test_engine,
@@ -97,3 +101,8 @@ def db_session():
         yield db
     finally:
         db.close()
+
+
+@pytest.fixture
+def sqlite_test_engine():
+    return test_engine
