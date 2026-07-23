@@ -5,11 +5,13 @@ from uuid import uuid4
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.evidence_linking import calculate_snapshot_hash
+from backend.tests.support import TEST_USER_ID
 
 
 def _fake_document_and_clause(session, document_id: str, body: str) -> tuple[Document, Clause]:
     document = Document(
         id=document_id,
+        owner_id=TEST_USER_ID,
         filename="flow.txt",
         content_type="text/plain",
         size_bytes=len(body),
@@ -50,6 +52,7 @@ def test_analysis_job_fails_when_evidence_does_not_match_snapshot(db_session):
 
     extraction = Extraction(
         id=document_id,
+        owner_id=TEST_USER_ID,
         filename_display="flow.pdf",
         source_type="pdf",
         size_bytes=10,

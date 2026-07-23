@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
+from backend.app.core.auth import get_current_user
 from backend.app.db.models import (
     AnalysisJob,
     AnalysisResultItem,
@@ -13,6 +14,7 @@ from backend.app.db.models import (
     Document,
     Extraction,
 )
+from backend.app.db.models import User
 from backend.app.services.clause_splitter import split_clauses
 from backend.app.services.evidence_linking import calculate_snapshot_hash
 
@@ -224,6 +226,29 @@ def _analysis_summary_from_items(
         ),
     }
 
+
+def _get_document_for_current_user(
+    *,
+    db: Session,
+    document_id: str,
+    current_user: User,
+) -> Document:
+    statement = (
+        select(Document)
+        .options(selectinload(Document.clauses))
+        .where(
+            Document.id == document_id,
+            Document.owner_id == current_user.id,
+        )
+    )
+    document = db.scalar(statement)
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+    return document
+
 def _is_snapshot_stale(
     item: AnalysisResultItem,
     current_snapshot_hash: str | None,
@@ -276,8 +301,17 @@ def _serialize_analysis_result_item(
     }
 
 
-def _get_extraction_snapshot(document_id: str, db: Session) -> list[dict[str, object]]:
-    extraction = db.get(Extraction, document_id)
+def _get_extraction_snapshot(
+    document_id: str,
+    db: Session,
+    current_user: User,
+) -> list[dict[str, object]]:
+    extraction = db.scalar(
+        select(Extraction).where(
+            Extraction.id == document_id,
+            Extraction.owner_id == current_user.id,
+        )
+    )
     if extraction is None:
         return []
 
@@ -293,6 +327,7 @@ def _get_extraction_snapshot(document_id: str, db: Session) -> list[dict[str, ob
 async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
     filename = file.filename or ""
     suffix = Path(filename).suffix.lower()
@@ -331,6 +366,7 @@ async def upload_document(
     document = Document(
         id=document_id,
         filename=filename,
+        owner_id=current_user.id,
         content_type=file.content_type,
         size_bytes=len(content),
         character_count=len(text),
@@ -366,20 +402,13 @@ async def upload_document(
 def get_document(
     document_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
-    statement = (
-        select(Document)
-        .options(selectinload(Document.clauses))
-        .where(Document.id == document_id)
+    document = _get_document_for_current_user(
+        db=db,
+        document_id=document_id,
+        current_user=current_user,
     )
-    document = db.scalar(statement)
-
-    if document is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Document not found.",
-        )
-
     return _serialize_document(document)
 
 
@@ -387,23 +416,26 @@ def get_document(
 def get_analysis_results(
     document_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
-    document = db.get(Document, document_id)
-
-    if document is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Document not found.",
-        )
+    _get_document_for_current_user(
+        db=db,
+        document_id=document_id,
+        current_user=current_user,
+    )
 
     statement = (
         select(AnalysisJob)
+        .join(Document)
         .options(
             selectinload(AnalysisJob.result_items).selectinload(
                 AnalysisResultItem.clause
             )
         )
-        .where(AnalysisJob.document_id == document_id)
+        .where(
+            AnalysisJob.document_id == document_id,
+            Document.owner_id == current_user.id,
+        )
         .order_by(AnalysisJob.created_at.desc())
     )
     job = db.scalars(statement).first()
@@ -414,8 +446,17 @@ def get_analysis_results(
             detail="Analysis result not found.",
         )
 
-    extraction = db.get(Extraction, document_id)
-    snapshot = _get_extraction_snapshot(document_id, db)
+    extraction = db.scalar(
+        select(Extraction).where(
+            Extraction.id == document_id,
+            Extraction.owner_id == current_user.id,
+        )
+    )
+    snapshot = _get_extraction_snapshot(
+        document_id,
+        db=db,
+        current_user=current_user,
+    )
     current_snapshot_hash: str | None = (
         _snapshot_hash(snapshot) if snapshot else None
     )

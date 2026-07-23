@@ -15,6 +15,7 @@ from backend.app.services.provider_execution import (
     ProviderExecutionPolicy,
     ProviderTimeoutError,
 )
+from backend.tests.support import TEST_USER_ID
 
 
 def _create_document_and_clause(
@@ -26,6 +27,7 @@ def _create_document_and_clause(
 
     document = Document(
         id=document_id,
+        owner_id=TEST_USER_ID,
         filename="pipeline.sample.txt",
         content_type="text/plain",
         size_bytes=10,
