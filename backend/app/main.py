@@ -11,6 +11,7 @@ from backend.app.api.extractions import router as extractions_router
 from backend.app.api.auth import router as auth_router
 from backend.app.db import models as _models  # noqa: F401
 from backend.app.core.config import get_jwt_config
+from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.services.extraction_orphan_cleanup import OrphanCleanupError
 from backend.app.services.extraction_orphan_cleanup import sweep_orphan_request_directories
 
@@ -56,6 +57,7 @@ def parse_cors_allowed_origins(value: str | None = None) -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
     get_jwt_config()
+    get_encryption_keyring()
     try:
         sweep_result = sweep_orphan_request_directories()
     except OrphanCleanupError:

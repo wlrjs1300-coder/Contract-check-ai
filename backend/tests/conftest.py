@@ -1,9 +1,29 @@
 from __future__ import annotations
 
 import os
+import json
+import base64
 
 os.environ.setdefault("JWT_SECRET", "x" * 64)
 os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15")
+os.environ.setdefault("DATA_ENCRYPTION_ACTIVE_KEY_ID", "synthetic-key-v1")
+os.environ.setdefault(
+    "DATA_ENCRYPTION_KEYS_JSON",
+    json.dumps(
+        [
+            {
+                "key_id": "synthetic-key-v1",
+                "key": base64.b64encode(bytes(range(32))).decode("ascii"),
+                "status": "active",
+            },
+            {
+                "key_id": "synthetic-key-v0",
+                "key": base64.b64encode(bytes(range(32, 64))).decode("ascii"),
+                "status": "decrypt_only",
+            },
+        ]
+    ),
+)
 
 import pytest
 from fastapi import Depends
