@@ -1,4 +1,4 @@
-﻿from uuid import uuid4
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
