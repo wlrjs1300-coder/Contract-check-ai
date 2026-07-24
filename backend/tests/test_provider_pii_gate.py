@@ -4,6 +4,9 @@ import pytest
 from sqlalchemy.orm import Session
 
 from backend.app.db.models import AnalysisJob
+from backend.app.core.encryption_config import get_encryption_keyring
+from backend.app.services.scalar_encryption import encrypt_clause_body
+from backend.tests.support import TEST_USER_ID
 from backend.app.services.analysis_result_schema import AnalysisResultData
 from backend.app.services.analysis_pipeline import (
     run_analysis_pipeline,
@@ -72,7 +75,13 @@ def test_run_analysis_pipeline_blocks_request_residual_from_path(
     monkeypatch,
 ) -> None:
     document, clause = _create_document_and_clause(db_session)
-    clause.body = "첨부파일 경로: C:\\\\secret\\\\contract.txt"
+    path_body = "첨부파일 경로: C:\\\\secret\\\\contract.txt"
+    clause.body_encrypted = encrypt_clause_body(
+        path_body,
+        clause_id=clause.id,
+        owner_id=TEST_USER_ID,
+        keyring=get_encryption_keyring(),
+    )
     db_session.commit()
 
     job = AnalysisJob(

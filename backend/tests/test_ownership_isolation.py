@@ -9,6 +9,10 @@ from sqlalchemy.orm import Session
 from backend.app.core.auth import get_current_user
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction, ExtractionPage
 from backend.app.main import app
+from backend.app.core.encryption_config import get_encryption_keyring
+from backend.app.services.scalar_encryption import encrypt_extraction_page_text
+from backend.app.services.scalar_encryption import decrypt_clause_body
+from backend.app.services.scalar_encryption import encrypt_clause_body
 
 client = TestClient(app)
 
@@ -65,6 +69,16 @@ def _create_extraction_for_user(
     *,
     extraction_id: str,
 ) -> str:
+    keyring = get_encryption_keyring()
+    page_text = "Synthetic extracted text."
+    text_encrypted = encrypt_extraction_page_text(
+        page_text,
+        extraction_id=extraction_id,
+        page_number=1,
+        owner_id=user_id,
+        keyring=keyring,
+    )
+
     extraction = Extraction(
         id=extraction_id,
         filename_display="sample.pdf",
@@ -102,14 +116,14 @@ def _create_extraction_for_user(
         extraction_id=extraction_id,
         page_number=1,
         method="direct",
-        text="Synthetic extracted text.",
+        text_encrypted=text_encrypted,
         warnings=[],
         requires_user_review=False,
         extra_data={
             "page_id": "1",
             "review_status": "confirmed",
             "review_version": 1,
-            "reviewed_text": "Synthetic extracted text.",
+            "reviewed_text": page_text,
             "text_changed": False,
             "text_source": "original",
             "final_text": "Synthetic extracted text.",
@@ -258,8 +272,9 @@ def test_extraction_cross_user_document_id_collision_isolation(db_session: Sessi
             unclassified_sections=[],
             document_warnings=[],
         )
+        conflict_clause_id = str(uuid4())
         conflicting_clause = Clause(
-            id=str(uuid4()),
+            id=conflict_clause_id,
             clause_id="clause-b-001",
             reference_id="conflict:clause:1",
             source_hash="conflict-source-hash",
@@ -267,7 +282,12 @@ def test_extraction_cross_user_document_id_collision_isolation(db_session: Sessi
             marker="1.",
             clause_type="normal",
             title="ConflictClause",
-            body="Existing user B clause.",
+            body_encrypted=encrypt_clause_body(
+                "Existing user B clause.",
+                clause_id=conflict_clause_id,
+                owner_id=user_b_id,
+                keyring=get_encryption_keyring(),
+            ),
             warnings=[],
         )
         conflicting_document.clauses.append(conflicting_clause)
@@ -309,7 +329,15 @@ def test_extraction_cross_user_document_id_collision_isolation(db_session: Sessi
             .all()
         )
         assert len(clauses) == 1
-        assert clauses[0].body == "Existing user B clause."
+        assert (
+            decrypt_clause_body(
+                clauses[0].body_encrypted,
+                clause_id=clauses[0].id,
+                owner_id=user_b_id,
+                keyring=get_encryption_keyring(),
+            )
+            == "Existing user B clause."
+        )
         assert clauses[0].reference_id == "conflict:clause:1"
 
         post_jobs = (

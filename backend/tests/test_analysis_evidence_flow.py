@@ -5,10 +5,14 @@ from uuid import uuid4
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.evidence_linking import calculate_snapshot_hash
+from backend.app.services.scalar_encryption import encrypt_clause_body
+from backend.app.core.encryption_config import get_encryption_keyring
 from backend.tests.support import TEST_USER_ID
 
 
 def _fake_document_and_clause(session, document_id: str, body: str) -> tuple[Document, Clause]:
+    clause_id = str(uuid4())
+    keyring = get_encryption_keyring()
     document = Document(
         id=document_id,
         owner_id=TEST_USER_ID,
@@ -21,7 +25,7 @@ def _fake_document_and_clause(session, document_id: str, body: str) -> tuple[Doc
         document_warnings=[],
     )
     clause = Clause(
-        id=str(uuid4()),
+        id=clause_id,
         clause_id="snapshot-clause-001",
         reference_id=f"{document_id}:clause:1",
         source_hash="fake",
@@ -29,7 +33,12 @@ def _fake_document_and_clause(session, document_id: str, body: str) -> tuple[Doc
         marker="1.",
         clause_type="normal",
         title="목적",
-        body=body,
+        body_encrypted=encrypt_clause_body(
+            body,
+            clause_id=clause_id,
+            owner_id=TEST_USER_ID,
+            keyring=keyring,
+        ),
         warnings=[],
     )
     clause.start_offset = 0

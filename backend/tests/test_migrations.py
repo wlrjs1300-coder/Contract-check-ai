@@ -348,6 +348,470 @@ def _insert_legacy_extraction(database_url: str) -> None:
         eng.dispose()
 
 
+def _insert_user(document_url: str, *, user_id: str, email: str = "migration-user@example.invalid") -> None:
+    engine = create_engine(document_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO users (
+                        id, email, password_hash, is_active, auth_version, created_at, updated_at
+                    ) VALUES (
+                        :id, :email, :password_hash, :is_active, :auth_version, :created_at, :updated_at
+                    )
+                    """
+                ),
+                {
+                    "id": user_id,
+                    "email": email,
+                    "password_hash": "hashed-password",
+                    "is_active": 1,
+                    "auth_version": 1,
+                    "created_at": "2026-01-01 00:00:00",
+                    "updated_at": "2026-01-01 00:00:00",
+                },
+            )
+    finally:
+        engine.dispose()
+
+
+def _insert_document_and_clause(
+    database_url: str,
+    *,
+    user_id: str,
+    document_id: str,
+    clause_id: str,
+) -> None:
+    """Insert a clauses row (pre-0003 plaintext schema) with no extraction/result rows."""
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents (
+                        id, filename, content_type, size_bytes, character_count, status,
+                        unclassified_sections, document_warnings, owner_id, created_at
+                    ) VALUES (
+                        :id, :filename, :content_type, :size_bytes, :character_count, :status,
+                        :unclassified_sections, :document_warnings, :owner_id, :created_at
+                    )
+                    """
+                ),
+                {
+                    "id": document_id,
+                    "filename": "document.txt",
+                    "content_type": "text/plain",
+                    "size_bytes": 10,
+                    "character_count": 4,
+                    "status": "processed",
+                    "unclassified_sections": "[]",
+                    "document_warnings": "[]",
+                    "owner_id": user_id,
+                    "created_at": "2026-01-01 00:00:00",
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO clauses (
+                        id, clause_id, document_id, reference_id, source_hash, ordinal, marker,
+                        clause_type, title, body, warnings
+                    ) VALUES (
+                        :id, :clause_id, :document_id, :reference_id, :source_hash, :ordinal, :marker,
+                        :clause_type, :title, :body, :warnings
+                    )
+                    """
+                ),
+                {
+                    "id": clause_id,
+                    "clause_id": "C-1",
+                    "document_id": document_id,
+                    "reference_id": "ref-standalone-clause",
+                    "source_hash": "hash-standalone",
+                    "ordinal": 1,
+                    "marker": "1.",
+                    "clause_type": "normal",
+                    "title": "조항",
+                    "body": "원문 본문",
+                    "warnings": "[]",
+                },
+            )
+    finally:
+        engine.dispose()
+
+
+def _insert_extraction_and_page(
+    database_url: str,
+    *,
+    user_id: str,
+    extraction_id: str,
+) -> None:
+    """Insert an extraction_pages row (pre-0003 plaintext schema) with no clause/result rows."""
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO extractions (
+                        id, filename_display, source_type, size_bytes, page_count, status,
+                        method, warnings, requires_user_review, owner_id, extra_data, created_at
+                    ) VALUES (
+                        :id, :filename_display, :source_type, :size_bytes, :page_count, :status,
+                        :method, :warnings, :requires_user_review, :owner_id, :extra_data, :created_at
+                    )
+                    """
+                ),
+                {
+                    "id": extraction_id,
+                    "filename_display": "scan.pdf",
+                    "source_type": "pdf",
+                    "size_bytes": 20,
+                    "page_count": 1,
+                    "status": "confirmed",
+                    "method": "pdf",
+                    "warnings": "[]",
+                    "requires_user_review": 0,
+                    "owner_id": user_id,
+                    "extra_data": "{}",
+                    "created_at": "2026-01-01 00:00:00",
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO extraction_pages (
+                        extraction_id, page_number, method, text, warnings, requires_user_review,
+                        extra_data
+                    ) VALUES (
+                        :extraction_id, :page_number, :method, :text, :warnings, :requires_user_review, :extra_data
+                    )
+                    """
+                ),
+                {
+                    "extraction_id": extraction_id,
+                    "page_number": 1,
+                    "method": "pdf",
+                    "text": "추출 텍스트",
+                    "warnings": "[]",
+                    "requires_user_review": 0,
+                    "extra_data": "{}",
+                },
+            )
+    finally:
+        engine.dispose()
+
+
+def _insert_standalone_analysis_result_item(
+    database_url: str,
+    *,
+    job_id: str,
+    document_id: str,
+    clause_record_id: str,
+) -> None:
+    """Insert an analysis_result_items row (pre-0003 plaintext schema) with no clause/extraction rows.
+
+    The migration engine does not enable SQLite FK enforcement, so this can stand alone.
+    """
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO analysis_jobs (
+                        id, document_id, status, created_at
+                    ) VALUES (
+                        :id, :document_id, :status, :created_at
+                    )
+                    """
+                ),
+                {
+                    "id": job_id,
+                    "document_id": document_id,
+                    "status": "completed",
+                    "created_at": "2026-01-01 00:00:00",
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO analysis_result_items (
+                        analysis_job_id, clause_record_id, reference_id, display_label, summary,
+                        expert_review_recommended, extra_data
+                    ) VALUES (
+                        :analysis_job_id, :clause_record_id, :reference_id, :display_label, :summary,
+                        :expert_review_recommended, :extra_data
+                    )
+                    """
+                ),
+                {
+                    "analysis_job_id": job_id,
+                    "clause_record_id": clause_record_id,
+                    "reference_id": "ref-item-standalone",
+                    "display_label": "주의",
+                    "summary": "요약",
+                    "expert_review_recommended": 0,
+                    "extra_data": "{}",
+                },
+            )
+    finally:
+        engine.dispose()
+
+
+def _insert_encrypted_owner_scoped_records(database_url: str, *, user_id: str) -> None:
+    """Insert one row per encrypted-only (post-0003) table using the real scalar encryption service."""
+    from backend.app.core.encryption_config import get_encryption_keyring
+    from backend.app.services.scalar_encryption import (
+        encrypt_analysis_result_summary,
+        encrypt_clause_body,
+        encrypt_extraction_page_text,
+    )
+
+    keyring = get_encryption_keyring()
+    doc_id = "11111111-1111-4111-8111-111111111111"
+    extraction_id = "11111111-1111-4111-8111-111111111112"
+    job_id = "11111111-1111-4111-8111-111111111113"
+    clause_id = "21111111-1111-4111-8111-111111111111"
+
+    body_encrypted = encrypt_clause_body(
+        "원문 본문",
+        clause_id=clause_id,
+        owner_id=user_id,
+        keyring=keyring,
+    )
+    text_encrypted = encrypt_extraction_page_text(
+        "추출 텍스트",
+        extraction_id=extraction_id,
+        page_number=1,
+        owner_id=user_id,
+        keyring=keyring,
+    )
+    summary_encrypted = encrypt_analysis_result_summary(
+        "요약",
+        analysis_job_id=job_id,
+        clause_record_id=clause_id,
+        owner_id=user_id,
+        keyring=keyring,
+    )
+
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO documents (
+                        id, filename, content_type, size_bytes, character_count, status,
+                        unclassified_sections, document_warnings, owner_id, created_at
+                    ) VALUES (
+                        :id, :filename, :content_type, :size_bytes, :character_count, :status,
+                        :unclassified_sections, :document_warnings, :owner_id, :created_at
+                    )
+                    """
+                ),
+                {
+                    "id": doc_id,
+                    "filename": "document.txt",
+                    "content_type": "text/plain",
+                    "size_bytes": 10,
+                    "character_count": 4,
+                    "status": "processed",
+                    "unclassified_sections": "[]",
+                    "document_warnings": "[]",
+                    "owner_id": user_id,
+                    "created_at": "2026-01-01 00:00:00",
+                },
+            )
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO clauses (
+                        id, clause_id, document_id, reference_id, source_hash, ordinal, marker,
+                        clause_type, title, body_encrypted, warnings
+                    ) VALUES (
+                        :id, :clause_id, :document_id, :reference_id, :source_hash, :ordinal, :marker,
+                        :clause_type, :title, :body_encrypted, :warnings
+                    )
+                    """
+                ),
+                {
+                    "id": clause_id,
+                    "clause_id": "C-1",
+                    "document_id": doc_id,
+                    "reference_id": "ref-001",
+                    "source_hash": "hash-001",
+                    "ordinal": 1,
+                    "marker": "1.",
+                    "clause_type": "normal",
+                    "title": "조항",
+                    "body_encrypted": body_encrypted,
+                    "warnings": "[]",
+                },
+            )
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO extractions (
+                        id, filename_display, source_type, size_bytes, page_count, status,
+                        method, warnings, requires_user_review, owner_id, extra_data, created_at
+                    ) VALUES (
+                        :id, :filename_display, :source_type, :size_bytes, :page_count, :status,
+                        :method, :warnings, :requires_user_review, :owner_id, :extra_data, :created_at
+                    )
+                    """
+                ),
+                {
+                    "id": extraction_id,
+                    "filename_display": "scan.pdf",
+                    "source_type": "pdf",
+                    "size_bytes": 20,
+                    "page_count": 1,
+                    "status": "confirmed",
+                    "method": "pdf",
+                    "warnings": "[]",
+                    "requires_user_review": 0,
+                    "owner_id": user_id,
+                    "extra_data": "{}",
+                    "created_at": "2026-01-01 00:00:00",
+                },
+            )
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO extraction_pages (
+                        extraction_id, page_number, method, text_encrypted, warnings, requires_user_review,
+                        extra_data
+                    ) VALUES (
+                        :extraction_id, :page_number, :method, :text_encrypted, :warnings, :requires_user_review, :extra_data
+                    )
+                    """
+                ),
+                {
+                    "extraction_id": extraction_id,
+                    "page_number": 1,
+                    "method": "pdf",
+                    "text_encrypted": text_encrypted,
+                    "warnings": "[]",
+                    "requires_user_review": 0,
+                    "extra_data": "{}",
+                },
+            )
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO analysis_jobs (
+                        id, document_id, status, created_at
+                    ) VALUES (
+                        :id, :document_id, :status, :created_at
+                    )
+                    """
+                ),
+                {
+                    "id": job_id,
+                    "document_id": doc_id,
+                    "status": "completed",
+                    "created_at": "2026-01-01 00:00:00",
+                },
+            )
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO analysis_result_items (
+                        analysis_job_id, clause_record_id, reference_id, display_label, summary_encrypted,
+                        expert_review_recommended, extra_data
+                    ) VALUES (
+                        :analysis_job_id, :clause_record_id, :reference_id, :display_label, :summary_encrypted,
+                        :expert_review_recommended, :extra_data
+                    )
+                    """
+                ),
+                {
+                    "analysis_job_id": job_id,
+                    "clause_record_id": clause_id,
+                    "reference_id": "ref-item-001",
+                    "display_label": "주의",
+                    "summary_encrypted": summary_encrypted,
+                    "expert_review_recommended": 0,
+                    "extra_data": "{}",
+                },
+            )
+    finally:
+        engine.dispose()
+
+
+def _expected_v0734_schema() -> MetaData:
+    metadata = MetaData()
+
+    clauses = Table(
+        "clauses",
+        metadata,
+        Column("id", String(36), primary_key=True),
+        Column("clause_id", String(50), nullable=False),
+        Column("document_id", String(36), nullable=False),
+        Column("reference_id", String(100), nullable=False),
+        Column("source_hash", String(64), nullable=False),
+        Column("ordinal", Integer, nullable=False),
+        Column("marker", String(50), nullable=False),
+        Column("clause_type", String(50), nullable=False),
+        Column("title", String(255), nullable=True),
+        Column("body_encrypted", Text, nullable=False),
+        Column("warnings", JSON, nullable=False),
+        ForeignKeyConstraint(["document_id"], ["documents.id"], ondelete="CASCADE"),
+        UniqueConstraint("document_id", "clause_id", name="uq_clauses_document_clause"),
+    )
+    Index("ix_clauses_document_id", clauses.c.document_id)
+    Index("ix_clauses_reference_id", clauses.c.reference_id, unique=True)
+
+    extraction_pages = Table(
+        "extraction_pages",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("extraction_id", String(36), nullable=False),
+        Column("page_number", Integer, nullable=False),
+        Column("method", String(20), nullable=False),
+        Column("text_encrypted", Text, nullable=False),
+        Column("warnings", JSON, nullable=False),
+        Column("requires_user_review", Boolean, nullable=False),
+        Column("extra_data", JSON, nullable=False),
+        ForeignKeyConstraint(["extraction_id"], ["extractions.id"], ondelete="CASCADE"),
+        UniqueConstraint(
+            "extraction_id",
+            "page_number",
+            name="uq_extraction_pages_number",
+        ),
+    )
+    Index("ix_extraction_pages_extraction_id", extraction_pages.c.extraction_id)
+
+    analysis_result_items = Table(
+        "analysis_result_items",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("analysis_job_id", String(36), nullable=False),
+        Column("clause_record_id", String(36), nullable=False),
+        Column("reference_id", String(100), nullable=False),
+        Column("display_label", String(50), nullable=False),
+        Column("summary_encrypted", Text, nullable=False),
+        Column("expert_review_recommended", Boolean, nullable=False),
+        Column("extra_data", JSON, nullable=False),
+        ForeignKeyConstraint(["analysis_job_id"], ["analysis_jobs.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["clause_record_id"], ["clauses.id"], ondelete="CASCADE"),
+        UniqueConstraint("analysis_job_id", "clause_record_id", name="uq_analysis_result_items_job_clause"),
+    )
+    Index("ix_analysis_result_items_analysis_job_id", analysis_result_items.c.analysis_job_id)
+    Index("ix_analysis_result_items_clause_record_id", analysis_result_items.c.clause_record_id)
+    Index("ix_analysis_result_items_reference_id", analysis_result_items.c.reference_id)
+
+    return metadata
+
+
 def _row_count(database_url: str, table_name: str) -> int:
     eng = create_engine(database_url)
     try:
@@ -512,6 +976,208 @@ def test_migration_0002_blocks_legacy_extraction_rows(tmp_path: Path, monkeypatc
         _assert_no_users_and_owner_columns(db_url)
         assert _row_count(db_url, "extractions") == 1
         assert _row_count(db_url, "documents") == 0
+    finally:
+        command.downgrade(config, "base")
+
+
+def _assert_pre_0003_columns_untouched(db_url: str) -> None:
+    eng = _engine(db_url)
+    try:
+        insp = inspect(eng)
+        assert "body_encrypted" not in {c["name"] for c in insp.get_columns("clauses")}
+        assert "body" in {c["name"] for c in insp.get_columns("clauses")}
+        assert "text_encrypted" not in {c["name"] for c in insp.get_columns("extraction_pages")}
+        assert "text" in {c["name"] for c in insp.get_columns("extraction_pages")}
+        assert "summary_encrypted" not in {c["name"] for c in insp.get_columns("analysis_result_items")}
+        assert "summary" in {c["name"] for c in insp.get_columns("analysis_result_items")}
+        assert not any(
+            uq["name"] == "uq_analysis_result_items_job_clause"
+            for uq in insp.get_unique_constraints("analysis_result_items")
+        )
+    finally:
+        eng.dispose()
+
+
+def test_migration_0003_upgrade_blocks_existing_clause_row(tmp_path: Path, monkeypatch) -> None:
+    db_url = f"sqlite:///{tmp_path / 'blocking_clause_row.sqlite'}"
+    _reset_sqlite_db(db_url)
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    config = _load_alembic_config(db_url)
+
+    try:
+        command.upgrade(config, "0002_auth_ownership")
+        _insert_user(db_url, user_id="11111111-1111-4111-8111-111111111111")
+        _insert_document_and_clause(
+            db_url,
+            user_id="11111111-1111-4111-8111-111111111111",
+            document_id="51111111-1111-4111-8111-111111111110",
+            clause_id="51111111-1111-4111-8111-111111111111",
+        )
+
+        with pytest.raises(RuntimeError, match="Existing development data must be cleared before scalar encryption migration."):
+            command.upgrade(config, "0003_scalar_field_encryption")
+
+        assert _revision(db_url) == "0002_auth_ownership"
+        assert _row_count(db_url, "clauses") == 1
+        assert _row_count(db_url, "extraction_pages") == 0
+        assert _row_count(db_url, "analysis_result_items") == 0
+        _assert_pre_0003_columns_untouched(db_url)
+    finally:
+        command.downgrade(config, "base")
+
+
+def test_migration_0003_upgrade_blocks_existing_extraction_page_row(tmp_path: Path, monkeypatch) -> None:
+    db_url = f"sqlite:///{tmp_path / 'blocking_extraction_page_row.sqlite'}"
+    _reset_sqlite_db(db_url)
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    config = _load_alembic_config(db_url)
+
+    try:
+        command.upgrade(config, "0002_auth_ownership")
+        _insert_user(db_url, user_id="11111111-1111-4111-8111-111111111111")
+        _insert_extraction_and_page(
+            db_url,
+            user_id="11111111-1111-4111-8111-111111111111",
+            extraction_id="61111111-1111-4111-8111-111111111111",
+        )
+
+        with pytest.raises(RuntimeError, match="Existing development data must be cleared before scalar encryption migration."):
+            command.upgrade(config, "0003_scalar_field_encryption")
+
+        assert _revision(db_url) == "0002_auth_ownership"
+        assert _row_count(db_url, "clauses") == 0
+        assert _row_count(db_url, "extraction_pages") == 1
+        assert _row_count(db_url, "analysis_result_items") == 0
+        _assert_pre_0003_columns_untouched(db_url)
+    finally:
+        command.downgrade(config, "base")
+
+
+def test_migration_0003_upgrade_blocks_existing_analysis_result_item_row(tmp_path: Path, monkeypatch) -> None:
+    db_url = f"sqlite:///{tmp_path / 'blocking_result_item_row.sqlite'}"
+    _reset_sqlite_db(db_url)
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    config = _load_alembic_config(db_url)
+
+    try:
+        command.upgrade(config, "0002_auth_ownership")
+        _insert_standalone_analysis_result_item(
+            db_url,
+            job_id="71111111-1111-4111-8111-111111111111",
+            document_id="71111111-1111-4111-8111-111111111112",
+            clause_record_id="71111111-1111-4111-8111-111111111113",
+        )
+
+        with pytest.raises(RuntimeError, match="Existing development data must be cleared before scalar encryption migration."):
+            command.upgrade(config, "0003_scalar_field_encryption")
+
+        assert _revision(db_url) == "0002_auth_ownership"
+        assert _row_count(db_url, "clauses") == 0
+        assert _row_count(db_url, "extraction_pages") == 0
+        assert _row_count(db_url, "analysis_result_items") == 1
+        _assert_pre_0003_columns_untouched(db_url)
+    finally:
+        command.downgrade(config, "base")
+
+
+def test_migration_0003_downgrade_blocks_encrypted_rows(tmp_path: Path, monkeypatch) -> None:
+    db_url = f"sqlite:///{tmp_path / 'downgrade_blocking.sqlite'}"
+    _reset_sqlite_db(db_url)
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    config = _load_alembic_config(db_url)
+
+    try:
+        command.upgrade(config, "0003_scalar_field_encryption")
+        _insert_user(db_url, user_id="11111111-1111-4111-8111-111111111111")
+        _insert_encrypted_owner_scoped_records(db_url, user_id="11111111-1111-4111-8111-111111111111")
+
+        with pytest.raises(RuntimeError, match="Encrypted development data must be cleared before scalar encryption downgrade."):
+            command.downgrade(config, "0002_auth_ownership")
+
+        assert _revision(db_url) == "0003_scalar_field_encryption"
+        assert _row_count(db_url, "clauses") == 1
+        assert _row_count(db_url, "extraction_pages") == 1
+        assert _row_count(db_url, "analysis_result_items") == 1
+
+        eng = _engine(db_url)
+        try:
+            insp = inspect(eng)
+            assert "body_encrypted" in {c["name"] for c in insp.get_columns("clauses")}
+            assert "body" not in {c["name"] for c in insp.get_columns("clauses")}
+            assert "text_encrypted" in {c["name"] for c in insp.get_columns("extraction_pages")}
+            assert "text" not in {c["name"] for c in insp.get_columns("extraction_pages")}
+            assert "summary_encrypted" in {c["name"] for c in insp.get_columns("analysis_result_items")}
+            assert "summary" not in {c["name"] for c in insp.get_columns("analysis_result_items")}
+            assert any(
+                uq["name"] == "uq_analysis_result_items_job_clause"
+                for uq in insp.get_unique_constraints("analysis_result_items")
+            )
+        finally:
+            eng.dispose()
+    finally:
+        _reset_sqlite_db(db_url)
+
+
+def test_migration_0003_upgrade_downgrade_roundtrip(tmp_path: Path, monkeypatch) -> None:
+    db_url = f"sqlite:///{tmp_path / 'scalar_encryption_roundtrip.sqlite'}"
+    _reset_sqlite_db(db_url)
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    config = _load_alembic_config(db_url)
+
+    command.upgrade(config, "0003_scalar_field_encryption")
+    try:
+        eng = _engine(db_url)
+        try:
+            insp = inspect(eng)
+            assert "body_encrypted" in {c["name"] for c in insp.get_columns("clauses")}
+            assert "body" not in {c["name"] for c in insp.get_columns("clauses")}
+            assert "text_encrypted" in {c["name"] for c in insp.get_columns("extraction_pages")}
+            assert "text" not in {c["name"] for c in insp.get_columns("extraction_pages")}
+            assert "summary_encrypted" in {c["name"] for c in insp.get_columns("analysis_result_items")}
+            assert "summary" not in {c["name"] for c in insp.get_columns("analysis_result_items")}
+            assert any(
+                uq["name"] == "uq_analysis_result_items_job_clause"
+                for uq in insp.get_unique_constraints("analysis_result_items")
+            )
+        finally:
+            eng.dispose()
+
+        command.downgrade(config, "0002_auth_ownership")
+        _assert_pre_0003_columns_untouched(db_url)
+    finally:
+        command.downgrade(config, "base")
+
+
+def test_migration_0003_schema_parity(tmp_path: Path, monkeypatch) -> None:
+    db_url = f"sqlite:///{tmp_path / 'schema_0003.sqlite'}"
+    _reset_sqlite_db(db_url)
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    config = _load_alembic_config(db_url)
+
+    command.upgrade(config, "0003_scalar_field_encryption")
+    try:
+        engine = _engine(db_url)
+        try:
+            insp = inspect(engine)
+            clause_columns = {c["name"]: c for c in insp.get_columns("clauses")}
+            page_columns = {c["name"]: c for c in insp.get_columns("extraction_pages")}
+            item_columns = {c["name"]: c for c in insp.get_columns("analysis_result_items")}
+
+            assert clause_columns["body_encrypted"]["nullable"] is False
+            assert str(clause_columns["body_encrypted"]["type"]).upper() in {"TEXT", "STRING"}
+            assert page_columns["text_encrypted"]["nullable"] is False
+            assert str(page_columns["text_encrypted"]["type"]).upper() in {"TEXT", "STRING"}
+            assert item_columns["summary_encrypted"]["nullable"] is False
+            assert str(item_columns["summary_encrypted"]["type"]).upper() in {"TEXT", "STRING"}
+            assert any(
+                uq["name"] == "uq_analysis_result_items_job_clause"
+                for uq in insp.get_unique_constraints("analysis_result_items")
+            )
+            assert _row_count(db_url, "clauses") == 0
+            assert _row_count(db_url, "extraction_pages") == 0
+            assert _row_count(db_url, "analysis_result_items") == 0
+        finally:
+            engine.dispose()
     finally:
         command.downgrade(config, "base")
 

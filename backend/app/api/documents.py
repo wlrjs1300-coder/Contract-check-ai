@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
 from backend.app.core.auth import get_current_user
+from backend.app.core.encryption_config import EncryptionKeyring, get_encryption_keyring
 from backend.app.db.models import (
     AnalysisJob,
     AnalysisResultItem,
@@ -17,6 +18,13 @@ from backend.app.db.models import (
 from backend.app.db.models import User
 from backend.app.services.clause_splitter import split_clauses
 from backend.app.services.evidence_linking import calculate_snapshot_hash
+from backend.app.services.scalar_encryption import (
+    ScalarEncryptionError,
+    ScalarDecryptionError,
+    decrypt_clause_body,
+    decrypt_analysis_result_summary,
+    encrypt_clause_body,
+)
 
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -25,7 +33,25 @@ MAX_FILE_SIZE = 1 * 1024 * 1024
 ALLOWED_SUFFIXES = {".txt"}
 
 
-def _serialize_clause(clause: Clause) -> dict[str, object]:
+def _serialize_clause(
+    clause: Clause,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[str, object]:
+    try:
+        body = decrypt_clause_body(
+            clause.body_encrypted,
+            clause_id=clause.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
+
     return {
         "clause_id": clause.clause_id,
         "reference_id": clause.reference_id,
@@ -34,13 +60,18 @@ def _serialize_clause(clause: Clause) -> dict[str, object]:
         "marker": clause.marker,
         "clause_type": clause.clause_type,
         "title": clause.title,
-        "body": clause.body,
+        "body": body,
         "warnings": clause.warnings,
     }
 
 
-def _serialize_document(document: Document) -> dict[str, object]:
+def _serialize_document(
+    document: Document,
+    *,
+    keyring: EncryptionKeyring,
+) -> dict[str, object]:
     clauses = sorted(document.clauses, key=lambda clause: clause.ordinal)
+    owner_id = document.owner_id
 
     return {
         "document_id": document.id,
@@ -50,7 +81,10 @@ def _serialize_document(document: Document) -> dict[str, object]:
         "character_count": document.character_count,
         "status": document.status,
         "clause_count": len(clauses),
-        "clauses": [_serialize_clause(clause) for clause in clauses],
+        "clauses": [
+            _serialize_clause(clause, owner_id=owner_id, keyring=keyring)
+            for clause in clauses
+        ],
         "unclassified_sections": document.unclassified_sections,
         "document_warnings": document.document_warnings,
     }
@@ -265,14 +299,21 @@ def _serialize_analysis_result_item(
     item: AnalysisResultItem,
     *,
     current_snapshot_hash: str | None,
+    owner_id: str,
+    keyring: EncryptionKeyring,
 ) -> dict[str, object]:
     value = _analysis_value(item)
+    summary = _resolve_analysis_result_summary(
+        item,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
     return {
         "clause_id": item.clause.clause_id,
         "reference_id": item.reference_id,
         "finding_id": item.id,
         "display_label": item.display_label,
-        "summary": item.summary,
+        "summary": summary,
         "expert_review_recommended": item.expert_review_recommended,
         "severity": value.get("severity", "info"),
         "title": value.get("title") or item.clause.title,
@@ -286,7 +327,7 @@ def _serialize_analysis_result_item(
             "negotiation_suggestions",
             [],
         ),
-        "recommendation": value.get("recommendation", item.summary),
+        "recommendation": value.get("recommendation", summary),
         "expert_review_reason_codes": value.get("expert_review_reason_codes", []),
         "expert_review_summary": value.get("expert_review_summary", ""),
         "evidence": value.get("evidence", item.extra_data.get("evidence", [])),
@@ -299,6 +340,27 @@ def _serialize_analysis_result_item(
             else None
         ),
     }
+
+
+def _resolve_analysis_result_summary(
+    item: AnalysisResultItem,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> str:
+    try:
+        return decrypt_analysis_result_summary(
+            item.summary_encrypted,
+            analysis_job_id=item.analysis_job_id,
+            clause_record_id=item.clause_record_id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
 
 
 def _get_extraction_snapshot(
@@ -375,10 +437,25 @@ async def upload_document(
         document_warnings=clause_result["document_warnings"],
     )
 
+    keyring = get_encryption_keyring()
     for clause_data in clause_result["clauses"]:
+        clause_id = str(uuid4())
+        body = str(clause_data["body"])
+        try:
+            body_encrypted = encrypt_clause_body(
+                body,
+                clause_id=clause_id,
+                owner_id=current_user.id,
+                keyring=keyring,
+            )
+        except ScalarEncryptionError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to prepare document content.",
+            ) from exc
         document.clauses.append(
             Clause(
-                id=str(uuid4()),
+                id=clause_id,
                 clause_id=clause_data["clause_id"],
                 reference_id=clause_data["reference_id"],
                 source_hash=clause_data["source_hash"],
@@ -386,7 +463,7 @@ async def upload_document(
                 marker=clause_data["marker"],
                 clause_type=clause_data["clause_type"],
                 title=clause_data["title"],
-                body=clause_data["body"],
+                body_encrypted=body_encrypted,
                 warnings=clause_data["warnings"],
             )
         )
@@ -395,7 +472,7 @@ async def upload_document(
     db.commit()
     db.refresh(document)
 
-    return _serialize_document(document)
+    return _serialize_document(document, keyring=keyring)
 
 
 @router.get("/{document_id}")
@@ -409,7 +486,8 @@ def get_document(
         document_id=document_id,
         current_user=current_user,
     )
-    return _serialize_document(document)
+    keyring = get_encryption_keyring()
+    return _serialize_document(document, keyring=keyring)
 
 
 @router.get("/{document_id}/analysis-results")
@@ -471,10 +549,13 @@ def get_analysis_results(
         key=lambda item: item.clause.ordinal,
     )
 
+    keyring = get_encryption_keyring()
     item_payloads = [
         _serialize_analysis_result_item(
             item=item,
             current_snapshot_hash=current_snapshot_hash,
+            owner_id=current_user.id,
+            keyring=keyring,
         )
         for item in items
     ]

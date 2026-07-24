@@ -2,12 +2,18 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
+from backend.app.core.encryption_config import get_encryption_keyring
 
 from backend.app.db.models import AnalysisJob, Clause, Document
 from backend.app.services.analysis_provider import AnalysisProviderInput
 from backend.app.services.analysis_pipeline import (
     run_analysis_pipeline,
     validate_reference_id,
+)
+from backend.app.services.scalar_encryption import (
+    decrypt_analysis_result_summary,
+    decrypt_clause_body,
+    encrypt_clause_body,
 )
 from backend.app.services.analysis_result_schema import AnalysisResultData
 from backend.app.services.provider_execution import (
@@ -24,6 +30,9 @@ def _create_document_and_clause(
     reference_id: str | None = None,
 ) -> tuple[Document, Clause]:
     document_id = str(uuid4())
+    keyring = get_encryption_keyring()
+    clause_id = str(uuid4())
+    body = "Synthetic clause body."
 
     document = Document(
         id=document_id,
@@ -38,7 +47,7 @@ def _create_document_and_clause(
     )
 
     clause = Clause(
-        id=str(uuid4()),
+        id=clause_id,
         clause_id="clause-001",
         reference_id=(
             reference_id
@@ -50,7 +59,12 @@ def _create_document_and_clause(
         marker="1.",
         clause_type="normal",
         title=None,
-        body="Synthetic clause body.",
+        body_encrypted=encrypt_clause_body(
+            body,
+            clause_id=clause_id,
+            owner_id=TEST_USER_ID,
+            keyring=keyring,
+        ),
         warnings=[],
     )
 
@@ -142,9 +156,18 @@ def test_run_analysis_pipeline_rolls_back_partial_results(
     db_session: Session,
 ) -> None:
     document, first_clause = _create_document_and_clause(db_session)
+    keyring = get_encryption_keyring()
+    second_clause_id = str(uuid4())
+    second_body = "Second synthetic clause body."
 
     second_clause = Clause(
-        id=str(uuid4()),
+        id=second_clause_id,
+        body_encrypted=encrypt_clause_body(
+            second_body,
+            clause_id=second_clause_id,
+            owner_id=TEST_USER_ID,
+            keyring=keyring,
+        ),
         clause_id="clause-002",
         reference_id="invalid-reference-id",
         source_hash="second-source-hash",
@@ -152,7 +175,6 @@ def test_run_analysis_pipeline_rolls_back_partial_results(
         marker="2.",
         clause_type="normal",
         title=None,
-        body="Second synthetic clause body.",
         warnings=[],
         document_id=document.id,
     )
@@ -244,7 +266,13 @@ def test_run_analysis_pipeline_accepts_custom_provider(
     assert len(job.result_items) == 1
     assert job.result_items[0].display_label == "주의"
     assert (
-        job.result_items[0].summary
+        decrypt_analysis_result_summary(
+            job.result_items[0].summary_encrypted,
+            analysis_job_id=job.id,
+            clause_record_id=clause.id,
+            owner_id=TEST_USER_ID,
+            keyring=get_encryption_keyring(),
+        )
         == "custom provider synthetic result"
     )
     assert job.result_items[0].expert_review_recommended is True
@@ -385,9 +413,12 @@ def test_run_analysis_pipeline_rolls_back_partial_results_on_mismatch(
     db_session: Session,
 ) -> None:
     document, first_clause = _create_document_and_clause(db_session)
+    keyring = get_encryption_keyring()
+    second_clause_id = str(uuid4())
+    second_body = "Second synthetic clause body."
 
     second_clause = Clause(
-        id=str(uuid4()),
+        id=second_clause_id,
         clause_id="clause-002",
         reference_id=f"{document.id}:clause:2",
         source_hash="second-source-hash",
@@ -395,7 +426,12 @@ def test_run_analysis_pipeline_rolls_back_partial_results_on_mismatch(
         marker="2.",
         clause_type="normal",
         title=None,
-        body="Second synthetic clause body.",
+        body_encrypted=encrypt_clause_body(
+            second_body,
+            clause_id=second_clause_id,
+            owner_id=TEST_USER_ID,
+            keyring=keyring,
+        ),
         warnings=[],
         document_id=document.id,
     )
@@ -457,7 +493,12 @@ def test_run_analysis_pipeline_sends_only_masked_text_to_provider(
     document, clause = _create_document_and_clause(db_session)
 
     original_body = "연락처: 010-1234-5678"
-    clause.body = original_body
+    clause.body_encrypted = encrypt_clause_body(
+        original_body,
+        clause_id=clause.id,
+        owner_id=TEST_USER_ID,
+        keyring=get_encryption_keyring(),
+    )
     db_session.commit()
     db_session.refresh(clause)
 
@@ -489,7 +530,15 @@ def test_run_analysis_pipeline_sends_only_masked_text_to_provider(
 
     db_session.refresh(clause)
 
-    assert clause.body == original_body
+    assert (
+        decrypt_clause_body(
+            clause.body_encrypted,
+            clause_id=clause.id,
+            owner_id=TEST_USER_ID,
+            keyring=get_encryption_keyring(),
+        )
+        == original_body
+    )
     assert job.status == "completed"
 
 
@@ -650,9 +699,12 @@ def test_run_analysis_pipeline_rolls_back_partial_results_on_unsafe_output(
     db_session: Session,
 ) -> None:
     document, first_clause = _create_document_and_clause(db_session)
+    keyring = get_encryption_keyring()
+    second_clause_id = str(uuid4())
+    second_body = "Second synthetic clause body."
 
     second_clause = Clause(
-        id=str(uuid4()),
+        id=second_clause_id,
         clause_id="clause-002",
         reference_id=f"{document.id}:clause:2",
         source_hash="second-source-hash",
@@ -660,7 +712,12 @@ def test_run_analysis_pipeline_rolls_back_partial_results_on_unsafe_output(
         marker="2.",
         clause_type="normal",
         title=None,
-        body="Second synthetic clause body.",
+        body_encrypted=encrypt_clause_body(
+            second_body,
+            clause_id=second_clause_id,
+            owner_id=TEST_USER_ID,
+            keyring=keyring,
+        ),
         warnings=[],
         document_id=document.id,
     )
@@ -870,9 +927,12 @@ def test_run_analysis_pipeline_rolls_back_partial_results_after_retry_failure(
     db_session: Session,
 ) -> None:
     document, first_clause = _create_document_and_clause(db_session)
+    keyring = get_encryption_keyring()
+    second_clause_id = str(uuid4())
+    second_body = "Second synthetic clause body."
 
     second_clause = Clause(
-        id=str(uuid4()),
+        id=second_clause_id,
         clause_id="clause-002",
         reference_id=f"{document.id}:clause:2",
         source_hash="second-source-hash",
@@ -880,7 +940,12 @@ def test_run_analysis_pipeline_rolls_back_partial_results_after_retry_failure(
         marker="2.",
         clause_type="normal",
         title=None,
-        body="Second synthetic clause body.",
+        body_encrypted=encrypt_clause_body(
+            second_body,
+            clause_id=second_clause_id,
+            owner_id=TEST_USER_ID,
+            keyring=keyring,
+        ),
         warnings=[],
         document_id=document.id,
     )
