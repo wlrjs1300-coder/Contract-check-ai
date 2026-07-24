@@ -10,4 +10,5 @@ Pillow==12.3.0
 pytesseract==0.3.13
 PyJWT==2.13.0
 pwdlib[argon2]==0.3.0
+cryptography==49.0.0
 alembic==1.18.5
