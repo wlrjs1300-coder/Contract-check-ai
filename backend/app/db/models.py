@@ -89,7 +89,7 @@ class Clause(Base):
     marker: Mapped[str] = mapped_column(String(50))
     clause_type: Mapped[str] = mapped_column(String(50))
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    body: Mapped[str] = mapped_column(Text)
+    body_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
 
     document: Mapped[Document] = relationship(back_populates="clauses")
@@ -119,6 +119,13 @@ class AnalysisJob(Base):
 
 class AnalysisResultItem(Base):
     __tablename__ = "analysis_result_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "analysis_job_id",
+            "clause_record_id",
+            name="uq_analysis_result_items_job_clause",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     analysis_job_id: Mapped[str] = mapped_column(
@@ -131,7 +138,7 @@ class AnalysisResultItem(Base):
     )
     reference_id: Mapped[str] = mapped_column(String(100), index=True)
     display_label: Mapped[str] = mapped_column(String(50))
-    summary: Mapped[str] = mapped_column(Text)
+    summary_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     expert_review_recommended: Mapped[bool] = mapped_column(Boolean, default=False)
     extra_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
@@ -184,7 +191,7 @@ class ExtractionPage(Base):
     )
     page_number: Mapped[int] = mapped_column(Integer)
     method: Mapped[str] = mapped_column(String(20))
-    text: Mapped[str] = mapped_column(Text)
+    text_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
     requires_user_review: Mapped[bool] = mapped_column(Boolean, default=True)
     extra_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

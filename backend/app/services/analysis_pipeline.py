@@ -4,6 +4,7 @@ from datetime import datetime
 
 
 from collections.abc import Sequence
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from backend.app.db.models import (
     AnalysisJob,
     AnalysisResultItem,
     Clause,
+    Document,
     Extraction,
 )
 from backend.app.services.analysis_provider import (
@@ -19,6 +21,10 @@ from backend.app.services.analysis_provider import (
     DEFAULT_ANALYSIS_PROVIDER,
     AnalysisProviderInput,
     analysis_result_data_from_provider_response,
+)
+from backend.app.services.scalar_encryption import (
+    encrypt_analysis_result_summary,
+    decrypt_clause_body,
 )
 from backend.app.services.analysis_provider_contract import (
     AnalysisClauseInput,
@@ -45,6 +51,7 @@ from backend.app.services.provider_execution import (
     ProviderExecutionPolicy,
     execute_provider,
 )
+from backend.app.core.encryption_config import EncryptionKeyring, get_encryption_keyring
 
 
 PII_RESIDUAL_REQUEST_ERROR = "provider_residual_pii_detected"
@@ -536,9 +543,19 @@ def validate_result_reference_id(
 
 def build_provider_input(
     clause: Clause,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
 ) -> tuple[AnalysisProviderInput, dict[str, object]]:
+    body = decrypt_clause_body(
+        clause.body_encrypted,
+        clause_id=clause.id,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+
     masking_result = detect_and_mask(
-        clause.body,
+        body,
         avoid_preexisting_token_collisions=True,
     )
     masked_text = masking_result["masked_text"]
@@ -627,7 +644,11 @@ def run_analysis_pipeline(
     provider_policy: ProviderExecutionPolicy = (
         DEFAULT_PROVIDER_EXECUTION_POLICY
     ),
+    keyring: EncryptionKeyring | None = None,
 ) -> None:
+    if keyring is None:
+        keyring = get_encryption_keyring()
+
     job.status = "processing"
     db.flush()
     snapshot, snapshot_hash, snapshot_version = _load_confirmation_snapshot(
@@ -637,9 +658,21 @@ def run_analysis_pipeline(
 
     request_index = 0
     try:
+        document_owner_id = db.scalar(
+            select(Document.owner_id).where(Document.id == job.document_id)
+        )
+        if not isinstance(document_owner_id, str) or not document_owner_id.strip():
+            raise ValueError(
+                "analysis_pipeline_owner_context_missing: unable to resolve document owner."
+            )
+
         for clause in clauses:
             validate_reference_id(job.document_id, clause)
-            provider_input, _masking_result = build_provider_input(clause)
+            provider_input, _masking_result = build_provider_input(
+                clause,
+                owner_id=document_owner_id,
+                keyring=keyring,
+            )
             request = build_provider_request(
                 request_id=f"{job.id}:{request_index}",
                 document_id=job.document_id,
@@ -698,7 +731,13 @@ def run_analysis_pipeline(
                     clause_record_id=clause.id,
                     reference_id=result_data.reference_id,
                     display_label=result_data.display_label,
-                    summary=result_data.summary,
+                    summary_encrypted=encrypt_analysis_result_summary(
+                        result_data.summary,
+                        analysis_job_id=job.id,
+                        clause_record_id=clause.id,
+                        owner_id=document_owner_id,
+                        keyring=keyring,
+                    ),
                     expert_review_recommended=(
                         result_data.expert_review_recommended
                     ),

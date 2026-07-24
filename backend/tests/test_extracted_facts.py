@@ -9,11 +9,15 @@ from backend.app.services.analysis_result_schema import (
     ALLOWED_EXPERT_REVIEW_CODES,
     AnalysisResultData,
 )
+from backend.app.services.scalar_encryption import encrypt_clause_body
+from backend.app.core.encryption_config import get_encryption_keyring
 from backend.tests.support import TEST_USER_ID
 
 
 def _create_document_and_clause(db_session, body: str):
     document_id = str(uuid4())
+    clause_id = str(uuid4())
+    keyring = get_encryption_keyring()
     document = Document(
         id=document_id,
         owner_id=TEST_USER_ID,
@@ -26,7 +30,7 @@ def _create_document_and_clause(db_session, body: str):
         document_warnings=[],
     )
     clause = Clause(
-        id=str(uuid4()),
+        id=clause_id,
         clause_id="clause-001",
         reference_id=f"{document_id}:clause:1",
         source_hash="hash",
@@ -34,7 +38,12 @@ def _create_document_and_clause(db_session, body: str):
         marker="1.",
         clause_type="normal",
         title="사실 항목 테스트",
-        body=body,
+        body_encrypted=encrypt_clause_body(
+            body,
+            clause_id=clause_id,
+            owner_id=TEST_USER_ID,
+            keyring=keyring,
+        ),
         warnings=[],
     )
     document.clauses.append(clause)

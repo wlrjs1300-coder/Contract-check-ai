@@ -7,10 +7,14 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
 from backend.app.core.auth import get_current_user
+from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction, User
 from backend.app.services.clause_splitter import split_clauses_with_snapshot
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.analysis_provider_factory import create_analysis_provider
+from backend.app.services.scalar_encryption import (
+    encrypt_clause_body,
+)
 
 
 router = APIRouter(tags=["analysis-jobs"])
@@ -172,21 +176,22 @@ def _load_or_create_analysis_document(
             detail="Document not found.",
         )
 
-    if document is None:
-        extraction_data = extraction.extra_data or {}
-        snapshot = extraction_data["confirmation_snapshot"]
-        if not isinstance(snapshot, list) or not snapshot:
-            raise HTTPException(
-                status_code=409,
-                detail="invalid_confirmation_snapshot",
-            )
-
-        split_result = split_clauses_with_snapshot(
-            snapshot,
-            document_id=extraction.id,
+    extraction_data = extraction.extra_data or {}
+    snapshot = extraction_data.get("confirmation_snapshot")
+    if not isinstance(snapshot, list) or not snapshot:
+        raise HTTPException(
+            status_code=409,
+            detail="invalid_confirmation_snapshot",
         )
-        clauses_data = split_result["clauses"]
 
+    split_result = split_clauses_with_snapshot(
+        snapshot,
+        document_id=extraction.id,
+    )
+    clauses_data = split_result["clauses"]
+    encryption_keyring = get_encryption_keyring()
+
+    if document is None:
         document = Document(
             id=extraction.id,
             owner_id=current_user_id,
@@ -208,44 +213,18 @@ def _load_or_create_analysis_document(
                 detail="Document not found.",
             ) from exc
 
-        for clause_data in clauses_data:
-            body = str(clause_data["text"])
-            clause = Clause(
-                id=str(uuid4()),
-                clause_id=clause_data["clause_id"],
-                reference_id=clause_data["reference_id"],
-                source_hash=clause_data["source_hash"],
-                ordinal=clause_data["ordinal"],
-                marker=clause_data["marker"],
-                clause_type=clause_data["clause_type"],
-                title=clause_data.get("title"),
-                body=body,
-                warnings=list(clause_data.get("warnings") or []),
-            )
-            clause.start_offset = clause_data.get("start_offset")
-            clause.end_offset = clause_data.get("end_offset")
-            clause.page_start = clause_data.get("page_start")
-            clause.page_end = clause_data.get("page_end")
-            clause.block_ids = clause_data.get("block_ids", [])
-            clause.clause_level = clause_data.get("clause_level")
-            clause.split_method = split_result["split_method"]
-            document.clauses.append(clause)
-        db.flush()
-        return document.id
-
-    extraction_data = extraction.extra_data or {}
-    snapshot = extraction_data["confirmation_snapshot"]
-    split_result = split_clauses_with_snapshot(
-        snapshot,
-        document_id=extraction.id,
-    )
-    clauses_data = split_result["clauses"]
-
     if not document.clauses:
         for clause_data in clauses_data:
             body = str(clause_data["text"])
+            clause_id = str(uuid4())
+            encrypted_body = encrypt_clause_body(
+                body,
+                clause_id=clause_id,
+                owner_id=current_user_id,
+                keyring=encryption_keyring,
+            )
             clause = Clause(
-                id=str(uuid4()),
+                id=clause_id,
                 clause_id=clause_data["clause_id"],
                 reference_id=clause_data["reference_id"],
                 source_hash=clause_data["source_hash"],
@@ -253,7 +232,7 @@ def _load_or_create_analysis_document(
                 marker=clause_data["marker"],
                 clause_type=clause_data["clause_type"],
                 title=clause_data.get("title"),
-                body=body,
+                body_encrypted=encrypted_body,
                 warnings=list(clause_data.get("warnings") or []),
             )
             clause.start_offset = clause_data.get("start_offset")
@@ -311,11 +290,7 @@ def create_analysis_job(
         provider=create_analysis_provider(),
     )
 
-    return {
-        "job_id": job.id,
-        "document_id": job.document_id,
-        "status": job.status,
-    }
+    return {"job_id": job.id, "document_id": job.document_id, "status": job.status}
 
 
 @router.post("/extractions/{extraction_id}/analysis-jobs")

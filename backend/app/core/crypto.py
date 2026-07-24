@@ -46,6 +46,39 @@ class EncryptionEnvelope:
             ciphertext=value["ciphertext"],  # type: ignore[arg-type]
         )
 
+    @classmethod
+    def from_json(cls, value: str) -> "EncryptionEnvelope":
+        if type(value) is not str:
+            raise EnvelopeValidationError(_safe_error())
+        if not value or value.strip() != value:
+            raise EnvelopeValidationError(_safe_error())
+
+        try:
+            parsed = json.loads(
+                value,
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
+        except Exception:
+            raise EnvelopeValidationError(_safe_error()) from None
+        return cls.from_mapping(parsed)
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "enc_version": self.enc_version,
+            "key_id": self.key_id,
+            "algorithm": self.algorithm,
+            "nonce": self.nonce,
+            "ciphertext": self.ciphertext,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(
+            self.to_mapping(),
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
     def __post_init__(self) -> None:
         if type(self.enc_version) is not int or self.enc_version != 1:
             raise EnvelopeValidationError(_safe_error())
@@ -181,3 +214,12 @@ def decrypt(
 
 
 _KEY_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise EnvelopeValidationError(_safe_error())
+        seen.add(key)
+    return dict(pairs)

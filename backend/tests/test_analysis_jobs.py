@@ -4,7 +4,10 @@ from PIL import Image
 from io import BytesIO
 
 from backend.app.api import analysis_jobs as analysis_jobs_api
+from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.services import analysis_pipeline
+from backend.app.services.scalar_encryption import decrypt_clause_body
+from backend.tests.support import TEST_USER_ID
 
 from backend.app.main import app
 
@@ -266,7 +269,18 @@ def test_extraction_analysis_job_uses_confirmed_snapshot_as_input(
 
     def _fake_run_analysis_pipeline(*args, **kwargs) -> None:
         clauses = kwargs.get("clauses") if "clauses" in kwargs else args[2]
-        captured_clauses.extend([clause.body for clause in clauses])
+        keyring = get_encryption_keyring()
+        captured_clauses.extend(
+            [
+                decrypt_clause_body(
+                    clause.body_encrypted,
+                    clause_id=clause.id,
+                    owner_id=TEST_USER_ID,
+                    keyring=keyring,
+                )
+                for clause in clauses
+            ]
+        )
 
         job = kwargs["job"]
         db = kwargs["db"]
