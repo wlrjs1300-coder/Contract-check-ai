@@ -377,13 +377,13 @@ def bind_evidence_to_finding(
     document_id: str,
     extraction_id: str,
     clause,
+    source_text: str,
     snapshot: list[dict[str, object]],
     snapshot_hash: str | None,
     snapshot_version: int | None,
 ) -> list[dict[str, object]]:
     del snapshot_version
     clause_id = clause.reference_id
-    source_text = str(getattr(clause, "body", ""))
 
     if not snapshot:
         return [

@@ -18,6 +18,7 @@ from backend.app.db.models import (
 from backend.app.db.models import User
 from backend.app.services.clause_splitter import split_clauses
 from backend.app.services.evidence_linking import calculate_snapshot_hash
+from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
 from backend.app.services.scalar_encryption import (
     ScalarEncryptionError,
     ScalarDecryptionError,
@@ -367,6 +368,8 @@ def _get_extraction_snapshot(
     document_id: str,
     db: Session,
     current_user: User,
+    *,
+    keyring: EncryptionKeyring,
 ) -> list[dict[str, object]]:
     extraction = db.scalar(
         select(Extraction).where(
@@ -378,9 +381,23 @@ def _get_extraction_snapshot(
         return []
 
     extra_data = extraction.extra_data or {}
-    snapshot = extra_data.get("confirmation_snapshot")
-    if not isinstance(snapshot, list):
+    stored_snapshot = extra_data.get("confirmation_snapshot")
+    if not isinstance(stored_snapshot, list) or not stored_snapshot:
         return []
+
+    try:
+        snapshot = decrypt_confirmation_snapshot(
+            stored_snapshot,
+            extraction_id=extraction.id,
+            owner_id=current_user.id,
+            snapshot_version=extra_data.get("snapshot_version"),
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
 
     return [item for item in snapshot if isinstance(item, dict)]
 
@@ -524,6 +541,7 @@ def get_analysis_results(
             detail="Analysis result not found.",
         )
 
+    keyring = get_encryption_keyring()
     extraction = db.scalar(
         select(Extraction).where(
             Extraction.id == document_id,
@@ -534,6 +552,7 @@ def get_analysis_results(
         document_id,
         db=db,
         current_user=current_user,
+        keyring=keyring,
     )
     current_snapshot_hash: str | None = (
         _snapshot_hash(snapshot) if snapshot else None
@@ -549,7 +568,6 @@ def get_analysis_results(
         key=lambda item: item.clause.ordinal,
     )
 
-    keyring = get_encryption_keyring()
     item_payloads = [
         _serialize_analysis_result_item(
             item=item,

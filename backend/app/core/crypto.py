@@ -115,6 +115,15 @@ def _encode_b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
 
 
+def build_canonical_record_id(payload: dict[str, object]) -> str:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def build_canonical_aad(
     *,
     resource_type: str,

@@ -26,6 +26,7 @@ from backend.app.services.scalar_encryption import (
     encrypt_analysis_result_summary,
     decrypt_clause_body,
 )
+from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
 from backend.app.services.analysis_provider_contract import (
     AnalysisClauseInput,
     AnalysisProviderRequest,
@@ -493,6 +494,9 @@ VALID_JOB_STATUSES = {
 def _load_confirmation_snapshot(
     db: Session,
     document_id: str,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
 ) -> tuple[list[dict[str, object]], str | None, int | None]:
     try:
         extraction = db.get(Extraction, document_id)
@@ -501,20 +505,31 @@ def _load_confirmation_snapshot(
         return [], None, None
     if extraction is None:
         return [], None, None
-
-    extra_data = extraction.extra_data or {}
-    snapshot = extra_data.get("confirmation_snapshot")
-    if not isinstance(snapshot, list):
+    if extraction.owner_id != owner_id:
         return [], None, None
 
+    extra_data = extraction.extra_data or {}
+    stored_snapshot = extra_data.get("confirmation_snapshot")
+    if not isinstance(stored_snapshot, list):
+        return [], None, None
+
+    raw_snapshot_version = extra_data.get("snapshot_version")
+    snapshot_version = (
+        int(raw_snapshot_version) if isinstance(raw_snapshot_version, int) else None
+    )
+
+    snapshot_list = decrypt_confirmation_snapshot(
+        stored_snapshot,
+        extraction_id=extraction.id,
+        owner_id=owner_id,
+        snapshot_version=snapshot_version,
+        keyring=keyring,
+    )
+
     snapshot_hash = extra_data.get("confirmation_checksum")
-    snapshot_version = extra_data.get("snapshot_version")
-    snapshot_list = [dict(item) for item in snapshot]
     return snapshot_list, (
         str(snapshot_hash) if snapshot_hash else calculate_snapshot_hash(snapshot_list)
-    ), (
-        int(snapshot_version) if isinstance(snapshot_version, int) else None
-    )
+    ), snapshot_version
 
 
 def validate_reference_id(
@@ -544,15 +559,9 @@ def validate_result_reference_id(
 def build_provider_input(
     clause: Clause,
     *,
-    owner_id: str,
-    keyring: EncryptionKeyring,
+    clause_body: str,
 ) -> tuple[AnalysisProviderInput, dict[str, object]]:
-    body = decrypt_clause_body(
-        clause.body_encrypted,
-        clause_id=clause.id,
-        owner_id=owner_id,
-        keyring=keyring,
-    )
+    body = clause_body
 
     masking_result = detect_and_mask(
         body,
@@ -651,10 +660,6 @@ def run_analysis_pipeline(
 
     job.status = "processing"
     db.flush()
-    snapshot, snapshot_hash, snapshot_version = _load_confirmation_snapshot(
-        db,
-        job.document_id,
-    )
 
     request_index = 0
     try:
@@ -666,12 +671,24 @@ def run_analysis_pipeline(
                 "analysis_pipeline_owner_context_missing: unable to resolve document owner."
             )
 
+        snapshot, snapshot_hash, snapshot_version = _load_confirmation_snapshot(
+            db,
+            job.document_id,
+            owner_id=document_owner_id,
+            keyring=keyring,
+        )
+
         for clause in clauses:
             validate_reference_id(job.document_id, clause)
-            provider_input, _masking_result = build_provider_input(
-                clause,
+            clause_body = decrypt_clause_body(
+                clause.body_encrypted,
+                clause_id=clause.id,
                 owner_id=document_owner_id,
                 keyring=keyring,
+            )
+            provider_input, _masking_result = build_provider_input(
+                clause,
+                clause_body=clause_body,
             )
             request = build_provider_request(
                 request_id=f"{job.id}:{request_index}",
@@ -717,6 +734,7 @@ def run_analysis_pipeline(
                     document_id=job.document_id,
                     extraction_id=job.document_id,
                     clause=clause,
+                    source_text=clause_body,
                     snapshot=snapshot,
                     snapshot_hash=snapshot_hash,
                     snapshot_version=snapshot_version,

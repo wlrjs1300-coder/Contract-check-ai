@@ -123,15 +123,38 @@ def test_validate_evidence_rejects_missing_blocks() -> None:
 def test_binds_and_validates_simple_clause() -> None:
     class Clause:
         reference_id = "doc:clause:1"
-        body = "이 계약의 목적은 테스트입니다."
 
     snapshot = _fixture_snapshot()
     evidence = bind_evidence_to_finding(
         document_id="doc",
         extraction_id="ext",
         clause=Clause(),
+        source_text="이 계약의 목적은 테스트입니다.",
         snapshot=snapshot,
         snapshot_hash=calculate_snapshot_hash(snapshot),
         snapshot_version=1,
     )
     assert evidence
+
+
+def test_binds_evidence_using_explicit_source_text_not_clause_attribute() -> None:
+    """Regression test: bind_evidence_to_finding must not depend on a `clause.body`
+    attribute. A real ORM Clause has no such attribute after PR #74 removed the
+    plaintext column, so this test uses a bare object with only `reference_id`.
+    """
+
+    class RealShapeClause:
+        reference_id = "doc:clause:1"
+
+    snapshot = _fixture_snapshot()
+    evidence = bind_evidence_to_finding(
+        document_id="doc",
+        extraction_id="ext",
+        clause=RealShapeClause(),
+        source_text="이 계약의 목적은 테스트입니다.",
+        snapshot=snapshot,
+        snapshot_hash=calculate_snapshot_hash(snapshot),
+        snapshot_version=1,
+    )
+    assert evidence
+    assert evidence[0]["source_text"] == "이 계약의 목적은 테스트입니다."
