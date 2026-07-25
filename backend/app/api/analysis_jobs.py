@@ -12,7 +12,9 @@ from backend.app.db.models import AnalysisJob, Clause, Document, Extraction, Use
 from backend.app.services.clause_splitter import split_clauses_with_snapshot
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.analysis_provider_factory import create_analysis_provider
+from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
 from backend.app.services.scalar_encryption import (
+    ScalarDecryptionError,
     encrypt_clause_body,
 )
 
@@ -104,12 +106,26 @@ def _get_extraction_ready_for_analysis(
             detail="extraction revision mismatch",
         )
 
-    snapshot = extra_data.get("confirmation_snapshot")
-    if not isinstance(snapshot, list) or not snapshot:
+    stored_snapshot = extra_data.get("confirmation_snapshot")
+    if not isinstance(stored_snapshot, list) or not stored_snapshot:
         raise HTTPException(
             status_code=409,
             detail="confirmation_required",
         )
+
+    try:
+        snapshot = decrypt_confirmation_snapshot(
+            stored_snapshot,
+            extraction_id=extraction.id,
+            owner_id=current_user.id,
+            snapshot_version=snapshot_version,
+            keyring=get_encryption_keyring(),
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="The extraction snapshot could not be decrypted.",
+        ) from exc
 
     page_numbers: list[int] = []
     page_ids: list[str] = []
@@ -177,19 +193,33 @@ def _load_or_create_analysis_document(
         )
 
     extraction_data = extraction.extra_data or {}
-    snapshot = extraction_data.get("confirmation_snapshot")
-    if not isinstance(snapshot, list) or not snapshot:
+    stored_snapshot = extraction_data.get("confirmation_snapshot")
+    if not isinstance(stored_snapshot, list) or not stored_snapshot:
         raise HTTPException(
             status_code=409,
             detail="invalid_confirmation_snapshot",
         )
+
+    encryption_keyring = get_encryption_keyring()
+    try:
+        snapshot = decrypt_confirmation_snapshot(
+            stored_snapshot,
+            extraction_id=extraction.id,
+            owner_id=current_user_id,
+            snapshot_version=extraction_data.get("snapshot_version"),
+            keyring=encryption_keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="The extraction snapshot could not be decrypted.",
+        ) from exc
 
     split_result = split_clauses_with_snapshot(
         snapshot,
         document_id=extraction.id,
     )
     clauses_data = split_result["clauses"]
-    encryption_keyring = get_encryption_keyring()
 
     if document is None:
         document = Document(

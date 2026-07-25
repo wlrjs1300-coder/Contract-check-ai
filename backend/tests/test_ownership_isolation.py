@@ -10,6 +10,10 @@ from backend.app.core.auth import get_current_user
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction, ExtractionPage
 from backend.app.main import app
 from backend.app.core.encryption_config import get_encryption_keyring
+from backend.app.services.nested_json_encryption import (
+    encrypt_confirmation_snapshot,
+    write_extraction_page_text_field,
+)
 from backend.app.services.scalar_encryption import encrypt_extraction_page_text
 from backend.app.services.scalar_encryption import decrypt_clause_body
 from backend.app.services.scalar_encryption import encrypt_clause_body
@@ -79,6 +83,26 @@ def _create_extraction_for_user(
         keyring=keyring,
     )
 
+    plaintext_snapshot = [
+        {
+            "page_id": "1",
+            "page_number": 1,
+            "final_text": "Synthetic extracted text.",
+            "text_source": "original",
+            "text_changed": False,
+            "method": "direct",
+            "warnings": [],
+            "blocks": [],
+        }
+    ]
+    encrypted_snapshot = encrypt_confirmation_snapshot(
+        plaintext_snapshot,
+        extraction_id=extraction_id,
+        owner_id=user_id,
+        snapshot_version=1,
+        keyring=keyring,
+    )
+
     extraction = Extraction(
         id=extraction_id,
         filename_display="sample.pdf",
@@ -94,23 +118,41 @@ def _create_extraction_for_user(
             "review_status": "confirmed",
             "review_version": 1,
             "snapshot_version": 1,
-            "confirmation_snapshot": [
-                {
-                    "page_id": "1",
-                    "page_number": 1,
-                    "final_text": "Synthetic extracted text.",
-                    "text_source": "original",
-                    "text_changed": False,
-                    "method": "direct",
-                    "warnings": [],
-                }
-            ],
+            "confirmation_snapshot": encrypted_snapshot,
             "final_total_text_length": 24,
-            "confirmation_checksum": "deadbeef",
+            "confirmation_checksum": _snapshot_checksum(plaintext_snapshot),
         },
     )
     db_session.add(extraction)
     db_session.flush()
+
+    page_extra_data: dict[str, object] = {
+        "page_id": "1",
+        "review_status": "confirmed",
+        "review_version": 1,
+        "text_changed": False,
+        "text_source": "original",
+        "analysis_blocked": False,
+        "blocks": [],
+    }
+    page_extra_data = write_extraction_page_text_field(
+        page_extra_data,
+        field_name="reviewed_text",
+        value=page_text,
+        extraction_id=extraction_id,
+        page_number=1,
+        owner_id=user_id,
+        keyring=keyring,
+    )
+    page_extra_data = write_extraction_page_text_field(
+        page_extra_data,
+        field_name="final_text",
+        value="Synthetic extracted text.",
+        extraction_id=extraction_id,
+        page_number=1,
+        owner_id=user_id,
+        keyring=keyring,
+    )
 
     page = ExtractionPage(
         extraction_id=extraction_id,
@@ -119,16 +161,7 @@ def _create_extraction_for_user(
         text_encrypted=text_encrypted,
         warnings=[],
         requires_user_review=False,
-        extra_data={
-            "page_id": "1",
-            "review_status": "confirmed",
-            "review_version": 1,
-            "reviewed_text": page_text,
-            "text_changed": False,
-            "text_source": "original",
-            "final_text": "Synthetic extracted text.",
-            "analysis_blocked": False,
-        },
+        extra_data=page_extra_data,
     )
     db_session.add(page)
     db_session.commit()
@@ -248,18 +281,6 @@ def test_extraction_cross_user_document_id_collision_isolation(db_session: Sessi
         )
         extraction = db_session.get(Extraction, extraction_id)
         assert extraction is not None
-        expected_checksum = _snapshot_checksum(
-            extraction.extra_data["confirmation_snapshot"],
-        )
-        extraction.extra_data = {
-            **extraction.extra_data,
-            "confirmation_checksum": expected_checksum,
-        }
-        db_session.add(extraction)
-        db_session.commit()
-        assert (
-            extraction.extra_data["confirmation_checksum"] == expected_checksum
-        )
 
         conflicting_document = Document(
             id=extraction_id,

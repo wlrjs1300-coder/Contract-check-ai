@@ -125,6 +125,35 @@ def test_run_analysis_pipeline_completes_job(
     )
 
 
+def test_run_analysis_pipeline_evidence_source_text_is_not_empty(
+    db_session: Session,
+) -> None:
+    """Regression test: evidence_linking.bind_evidence_to_finding must not rely
+    on a `clause.body` attribute. A real ORM Clause has no such attribute after
+    the PR #74 scalar-encryption migration removed the plaintext column, so this
+    test exercises a real Clause (not a hand-rolled fake) end to end through
+    run_analysis_pipeline and asserts the resulting evidence source_text is the
+    actual decrypted clause body, not an empty string.
+    """
+    document, clause = _create_document_and_clause(db_session)
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document.id,
+        status="queued",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    run_analysis_pipeline(db_session, job, [clause])
+
+    assert job.status == "completed"
+    evidence = job.result_items[0].extra_data.get("evidence")
+    assert evidence
+    assert evidence[0]["source_text"] == "Synthetic clause body."
+
+
 def test_run_analysis_pipeline_marks_job_failed(
     db_session: Session,
 ) -> None:

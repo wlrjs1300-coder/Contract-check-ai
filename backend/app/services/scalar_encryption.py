@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
-
 from backend.app.core.crypto import (
     EnvelopeValidationError,
     encrypt,
     decrypt,
     build_canonical_aad,
+    build_canonical_record_id,
     EncryptionEnvelope,
 )
 from backend.app.core.encryption_config import EncryptionKeyring
@@ -21,12 +20,7 @@ class ScalarDecryptionError(RuntimeError):
 
 
 def _build_canonical_record_id(payload: dict[str, object]) -> str:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    return build_canonical_record_id(payload)
 
 
 def _require_str(value: object, field_name: str, *, error_type: type[Exception]) -> str:

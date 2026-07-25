@@ -85,6 +85,14 @@ from backend.app.services.scalar_encryption import (
     decrypt_extraction_page_text,
     encrypt_extraction_page_text,
 )
+from backend.app.services.nested_json_encryption import (
+    decrypt_confirmation_snapshot,
+    decrypt_extraction_page_blocks,
+    encrypt_confirmation_snapshot,
+    encrypt_extraction_page_blocks,
+    read_extraction_page_text_field,
+    write_extraction_page_text_field,
+)
 
 
 MAX_PAGE_REVIEW_TEXT = 200_000
@@ -166,17 +174,36 @@ def _extract_review_data(
 def _extract_page_review_data(
     page: ExtractionPage,
     page_text: str,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
 ) -> dict[str, object]:
     page_data = page.extra_data or {}
+    reviewed_text = _read_page_text_field(
+        page_data,
+        field_name="reviewed_text",
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    final_text = _read_page_text_field(
+        page_data,
+        field_name="final_text",
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
     return {
         "review_status": page_data.get("review_status", "pending"),
         "review_version": page_data.get("review_version", 1),
-        "reviewed_text": page_data.get("reviewed_text"),
+        "reviewed_text": reviewed_text,
         "text_changed": bool(page_data.get("text_changed", False)),
         "reviewed_at": page_data.get("reviewed_at"),
         "confirmed_at": page_data.get("confirmed_at"),
-        "final_text": page_data.get("final_text"),
-        "final_text_preview": (page_data.get("final_text") or page_text)[:80],
+        "final_text": final_text,
+        "final_text_preview": (final_text or page_text)[:80],
     }
 
 
@@ -238,6 +265,168 @@ def _encrypt_page_text(
         ) from exc
 
 
+def _read_page_text_field(
+    page_data: dict[str, object],
+    *,
+    field_name: str,
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> str | None:
+    try:
+        return read_extraction_page_text_field(
+            page_data,
+            field_name=field_name,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                f"The {field_name} could not be decrypted.",
+            ),
+        ) from exc
+
+
+def _write_page_text_field(
+    page_data: dict[str, object],
+    *,
+    field_name: str,
+    value: str | None,
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[str, object]:
+    try:
+        return write_extraction_page_text_field(
+            page_data,
+            field_name=field_name,
+            value=value,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                f"Failed to protect {field_name}.",
+            ),
+        ) from exc
+
+
+def _decrypt_page_blocks(
+    blocks: list[dict[str, object]],
+    *,
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    try:
+        return decrypt_extraction_page_blocks(
+            blocks,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "The page blocks could not be decrypted.",
+            ),
+        ) from exc
+
+
+def _encrypt_page_blocks(
+    blocks: list[dict[str, object]],
+    *,
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    try:
+        return encrypt_extraction_page_blocks(
+            blocks,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "Failed to protect page blocks.",
+            ),
+        ) from exc
+
+
+def _encrypt_snapshot(
+    snapshot: list[dict[str, object]],
+    *,
+    extraction_id: str,
+    owner_id: str,
+    snapshot_version: int,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    try:
+        return encrypt_confirmation_snapshot(
+            snapshot,
+            extraction_id=extraction_id,
+            owner_id=owner_id,
+            snapshot_version=snapshot_version,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "Failed to protect the confirmation snapshot.",
+            ),
+        ) from exc
+
+
+def _decrypt_snapshot(
+    stored_snapshot: list[dict[str, object]],
+    *,
+    extraction_id: str,
+    owner_id: str,
+    snapshot_version: int | None,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    try:
+        return decrypt_confirmation_snapshot(
+            stored_snapshot,
+            extraction_id=extraction_id,
+            owner_id=owner_id,
+            snapshot_version=snapshot_version,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "The confirmation snapshot could not be decrypted.",
+            ),
+        ) from exc
+
+
 def _build_review_summary(
     extraction: Extraction,
     *,
@@ -256,6 +445,8 @@ def _build_review_summary(
         page_review_data = _extract_page_review_data(
             page,
             page_text=_get_extraction_page_text(page, owner_id=owner_id, keyring=keyring),
+            owner_id=owner_id,
+            keyring=keyring,
         )
         is_required = page.requires_user_review
         page_status = page_review_data["review_status"]
@@ -333,6 +524,15 @@ def _serialize_extraction(
         page_review_data = _extract_page_review_data(
             page,
             page_text=page_text,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        page_blocks = _decrypt_page_blocks(
+            (page.extra_data or {}).get("blocks", []),
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
         )
         page_responses.append(
             ExtractionPageResponse(
@@ -344,7 +544,7 @@ def _serialize_extraction(
                 source_format=(page.extra_data or {}).get("source_format"),
                 normalized_width=(page.extra_data or {}).get("normalized_width"),
                 normalized_height=(page.extra_data or {}).get("normalized_height"),
-                blocks=(page.extra_data or {}).get("blocks", []),
+                blocks=page_blocks,
                 warnings=page.warnings,
                 requires_user_review=page.requires_user_review,
                 review_required=page.requires_user_review,
@@ -890,6 +1090,13 @@ async def create_extraction(
             page_text,
             extraction_keyring,
         )
+        encrypted_blocks = _encrypt_page_blocks(
+            page["blocks"],
+            extraction_id=extraction.id,
+            page_number=page["page_number"],
+            owner_id=current_user.id,
+            keyring=extraction_keyring,
+        )
         extraction.pages.append(
             ExtractionPage(
                 page_number=page["page_number"],
@@ -904,17 +1111,17 @@ async def create_extraction(
                     "normalized_height": page["normalized_height"],
                     "analysis_blocked": page["analysis_blocked"],
                     "failure": page["failure"],
-                    "blocks": page["blocks"],
+                    "blocks": encrypted_blocks,
                     "classification": page["classification"],
                     "review_status": "not_required"
                     if not page["requires_user_review"]
                     else "pending",
                     "review_version": 1,
-                    "reviewed_text": None,
+                    "reviewed_text_encrypted": None,
                     "text_changed": False,
                     "confirmed_at": None,
                     "reviewed_at": None,
-                    "final_text": None,
+                    "final_text_encrypted": None,
                 },
             )
         )
@@ -1110,6 +1317,22 @@ async def create_image_extraction(
             page_text,
             extraction_keyring,
         )
+        encrypted_blocks = _encrypt_page_blocks(
+            [
+                {
+                    "block_index": block.block_index,
+                    "text": block.text,
+                    "confidence": block.confidence,
+                    "bbox": block.bbox,
+                    "reading_order": block.reading_order,
+                }
+                for block in page.blocks
+            ],
+            extraction_id=extraction.id,
+            page_number=page.page_number,
+            owner_id=current_user.id,
+            keyring=extraction_keyring,
+        )
         extraction.pages.append(
             ExtractionPage(
                 page_number=page.page_number,
@@ -1128,25 +1351,16 @@ async def create_image_extraction(
                     "normalized_height": page.normalized_height,
                     "analysis_blocked": page.analysis_blocked,
                     "failure": None,
-                    "blocks": [
-                        {
-                            "block_index": block.block_index,
-                            "text": block.text,
-                            "confidence": block.confidence,
-                            "bbox": block.bbox,
-                            "reading_order": block.reading_order,
-                        }
-                        for block in page.blocks
-                    ],
+                    "blocks": encrypted_blocks,
                     "review_status": "not_required"
                     if not page.review_required
                     else "pending",
                     "review_version": 1,
-                    "reviewed_text": None,
+                    "reviewed_text_encrypted": None,
                     "text_changed": False,
                     "reviewed_at": None,
                     "confirmed_at": None,
-                    "final_text": None,
+                    "final_text_encrypted": None,
                 },
             )
         )
@@ -1201,8 +1415,17 @@ def get_extraction_review(
         page_data = _extract_page_review_data(
             page,
             page_text=page_text,
+            owner_id=owner_id,
+            keyring=keyring,
         )
         page_extra = page.extra_data or {}
+        page_blocks = _decrypt_page_blocks(
+            page_extra.get("blocks", []),
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
         review_pages.append(
             ExtractionReviewPageResponse(
                 page_id=str(page_extra.get("page_id", page.page_number)),
@@ -1218,7 +1441,7 @@ def get_extraction_review(
                 reviewed_at=page_data["reviewed_at"],
                 confirmed_at=page_data["confirmed_at"],
                 warnings=page.warnings,
-                blocks=page_extra.get("blocks", []),
+                blocks=page_blocks,
                 failure=page_extra.get("failure"),
                 analysis_blocked=bool(page_extra.get("analysis_blocked", True)),
             )
@@ -1371,7 +1594,14 @@ def _build_confirmation_snapshot(
             )
 
         final_text = (
-            page_data.get("reviewed_text")
+            _read_page_text_field(
+                page_data,
+                field_name="reviewed_text",
+                extraction_id=page.extraction_id,
+                page_number=page.page_number,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
             if review_status == "edited"
             else _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
         )
@@ -1409,7 +1639,13 @@ def _build_confirmation_snapshot(
                 "text_changed": is_changed,
                 "method": page.method,
                 "warnings": page.warnings,
-                "blocks": (page_data.get("blocks") or []),
+                "blocks": _decrypt_page_blocks(
+                    page_data.get("blocks") or [],
+                    extraction_id=page.extraction_id,
+                    page_number=page.page_number,
+                    owner_id=owner_id,
+                    keyring=keyring,
+                ),
             }
         )
         confirmed_pages += 1
@@ -1514,15 +1750,31 @@ def patch_extraction_page_review(
     page_status = page_data.get("review_status", "pending")
     if page_status == "confirmed":
         page_text = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+        confirmed_reviewed_text = _read_page_text_field(
+            page_data,
+            field_name="reviewed_text",
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        confirmed_final_text = _read_page_text_field(
+            page_data,
+            field_name="final_text",
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
         return ExtractionReviewPageResponse(
             page_id=str(page_data.get("page_id", page_id)),
             page_number=page.page_number,
             method=page.method,
             classification=page_data.get("classification"),
             original_text=page_text,
-            reviewed_text=page_data.get("reviewed_text"),
+            reviewed_text=confirmed_reviewed_text,
             final_text_preview=(
-                page_data.get("final_text") or page_data.get("reviewed_text")
+                confirmed_final_text or confirmed_reviewed_text
                 or page_text
             )[:80],
             text_changed=bool(page_data.get("text_changed", False)),
@@ -1531,7 +1783,13 @@ def patch_extraction_page_review(
             reviewed_at=page_data.get("reviewed_at"),
             confirmed_at=page_data.get("confirmed_at"),
             warnings=page.warnings,
-            blocks=page_data.get("blocks", []),
+            blocks=_decrypt_page_blocks(
+                page_data.get("blocks", []),
+                extraction_id=page.extraction_id,
+                page_number=page.page_number,
+                owner_id=owner_id,
+                keyring=keyring,
+            ),
             failure=page_data.get("failure"),
             analysis_blocked=bool(page_data.get("analysis_blocked", True)),
         )
@@ -1569,14 +1827,30 @@ def patch_extraction_page_review(
     new_version = current_version + 1
     page_data = {
         **page_data,
-        "reviewed_text": reviewed_text,
         "text_changed": text_changed,
         "reviewed_at": _to_iso_timestamp(datetime.now(UTC)),
         "review_version": new_version,
         "review_status": "edited" if text_changed else "reviewed",
-        "final_text": final_text,
         "confirmed_at": None,
     }
+    page_data = _write_page_text_field(
+        page_data,
+        field_name="reviewed_text",
+        value=reviewed_text,
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    page_data = _write_page_text_field(
+        page_data,
+        field_name="final_text",
+        value=final_text,
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
 
     page.extra_data = page_data
     extraction_metadata = extraction.extra_data or {}
@@ -1597,21 +1871,43 @@ def patch_extraction_page_review(
     db.refresh(extraction)
 
     page_data = page.extra_data or {}
+    final_reviewed_text = _read_page_text_field(
+        page_data,
+        field_name="reviewed_text",
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    final_final_text = _read_page_text_field(
+        page_data,
+        field_name="final_text",
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
     return ExtractionReviewPageResponse(
         page_id=str(page_data.get("page_id", page_id)),
         page_number=page.page_number,
         method=page.method,
         classification=page_data.get("classification"),
         original_text=original_text,
-        reviewed_text=page_data.get("reviewed_text"),
-        final_text_preview=(page_data.get("final_text") or original_text)[:80],
+        reviewed_text=final_reviewed_text,
+        final_text_preview=(final_final_text or original_text)[:80],
         text_changed=bool(page_data.get("text_changed", False)),
         review_status=page_data.get("review_status", "pending"),
         review_version=new_version,
         reviewed_at=page_data.get("reviewed_at"),
         confirmed_at=page_data.get("confirmed_at"),
         warnings=page.warnings,
-        blocks=page_data.get("blocks", []),
+        blocks=_decrypt_page_blocks(
+            page_data.get("blocks", []),
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        ),
         failure=page_data.get("failure"),
         analysis_blocked=bool(page_data.get("analysis_blocked", True)),
     )
@@ -1656,8 +1952,15 @@ def confirm_extraction(
 
     summary = _build_review_summary(extraction, owner_id=owner_id, keyring=keyring)
     if summary["extraction_review_status"] == "confirmed":
-        page_snapshot = extraction.extra_data.get("confirmation_snapshot", [])
-        if summary["extraction_review_status"] == "confirmed" and page_snapshot:
+        stored_snapshot = extraction.extra_data.get("confirmation_snapshot", [])
+        if stored_snapshot:
+            page_snapshot = _decrypt_snapshot(
+                stored_snapshot,
+                extraction_id=extraction.id,
+                owner_id=owner_id,
+                snapshot_version=extraction.extra_data.get("snapshot_version"),
+                keyring=keyring,
+            )
             return ExtractionConfirmationResponse(
                 extraction_id=extraction.id,
                 extraction_status=extraction.status,
@@ -1709,21 +2012,46 @@ def confirm_extraction(
 
     for page in sorted(extraction.pages, key=lambda item: item.page_number):
         page_data = page.extra_data or {}
+        was_edited = page_data.get("review_status") == "edited"
         page_data["review_status"] = "confirmed"
         page_data["confirmed_at"] = snapshot_timestamp
-        if page_data.get("review_status") == "edited":
-            page_data["final_text"] = page_data.get("reviewed_text")
+        if was_edited:
+            final_text_value = _read_page_text_field(
+                page_data,
+                field_name="reviewed_text",
+                extraction_id=page.extraction_id,
+                page_number=page.page_number,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
         else:
-            page_data["final_text"] = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+            final_text_value = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+        page_data = _write_page_text_field(
+            page_data,
+            field_name="final_text",
+            value=final_text_value,
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
         page_data["review_version"] = int(page_data.get("review_version", 1)) + 1
         page.extra_data = page_data
+
+    encrypted_snapshot = _encrypt_snapshot(
+        snapshot,
+        extraction_id=extraction.id,
+        owner_id=owner_id,
+        snapshot_version=snapshot_version,
+        keyring=keyring,
+    )
 
     extraction.extra_data = {
         **(extraction.extra_data or {}),
         "review_status": "confirmed",
         "confirmed_at": snapshot_timestamp,
         "review_version": request_version + 1,
-        "confirmation_snapshot": snapshot,
+        "confirmation_snapshot": encrypted_snapshot,
         "snapshot_version": snapshot_version,
         "final_total_text_length": total_text_length,
         "confirmation_checksum": checksum,

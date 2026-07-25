@@ -2,7 +2,7 @@
 
 ## 상태
 
-proposed for v0.7.5 implementation
+PR-2(scalar field encryption)와 PR-3(nested JSON sensitive-subfield encryption) implemented for v0.7.5. Rotation helper 실사용, B등급 필드(filename 등) 암호화, 실데이터 migration/backfill은 후속 범위로 남아 있다.
 
 ## 배경
 
@@ -19,15 +19,16 @@ proposed for v0.7.5 implementation
 - raw Provider request/response, raw token mapping, raw PII와 중복 원문은 저장하지 않는다.
 - 전체 `extra_data` 투명 암호화보다 service layer의 명시적 암복호화를 우선한다.
 
-## 구현 전 확정 필요
+## 구현 결과 (PR-2 / PR-3 기준)
 
-- 정확한 encrypted 컬럼과 envelope 저장 타입
-- migration revision과 upgrade/downgrade 구조
-- scalar 필드별 ORM 적용 방식
-- `Document.filename`과 `Extraction.filename_display` 처리
-- AESGCM 결합 payload를 저장하는 컬럼 형식
-- `owner_id` AAD 정책의 구현 상세
-- 제한된 재암호화 helper의 범위와 transaction 단위
+- scalar 필드는 `*_encrypted` Text 컬럼에 envelope를 JSON 문자열로 저장한다(`backend/app/services/scalar_encryption.py`, migration `0003_scalar_field_encryption`).
+- nested JSON 하위 필드(`ExtractionPage.extra_data`의 `reviewed_text`/`final_text`/`blocks[*].text`, `Extraction.extra_data.confirmation_snapshot`의 `pages[*].final_text`/`pages[*].blocks[*].text`)는 같은 envelope를 JSON 컬럼 내부에 dict(mapping)로 저장한다(`backend/app/services/nested_json_encryption.py`). 이 변경은 컬럼 타입을 바꾸지 않으므로 별도 migration revision을 추가하지 않았다.
+- `owner_id` AAD 정책은 아래 "AAD와 소유권 이전" 절 그대로 구현했다. 하위 리소스는 검증된 부모(`Document`/`Extraction`)의 `owner_id`를 사용하며, `Clause`/`ExtractionPage`/`AnalysisResultItem`/confirmation snapshot 어디에도 관계 traversal이 아닌 명시적으로 전달된 owner 값을 사용한다.
+
+## 구현 전 확정 필요 (남은 항목)
+
+- `Document.filename`과 `Extraction.filename_display` 처리 (B등급, 미구현)
+- 제한된 재암호화 helper의 범위와 transaction 단위 (rotation 기반은 keyring이 지원하지만 실사용 helper는 미구현)
 
 ## 소유권 경계
 

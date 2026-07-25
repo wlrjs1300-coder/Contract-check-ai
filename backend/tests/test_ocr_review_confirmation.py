@@ -5,6 +5,7 @@ from io import BytesIO
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy import text
 
 from backend.app.main import app
 from backend.tests.test_pdf_extraction import _synthetic_text_pdf
@@ -253,3 +254,97 @@ def test_confirmation_checksum_and_review_blocking_with_incomplete_review() -> N
     )
     assert confirm.status_code == 409
     assert confirm.json()["detail"]["code"] == "extraction_review_incomplete"
+
+
+def test_edited_text_survives_confirmation_in_page_level_view() -> None:
+    """Regression test for a confirm_extraction ordering bug: page-level
+    final_text/final_text_preview must retain the edited text after
+    confirmation instead of silently reverting to the original OCR text.
+    """
+    extraction = _post_image_extraction()
+    extraction_id = extraction["extraction_id"]
+    pages = client.get(f"/extractions/{extraction_id}/review").json()["pages"]
+    first = pages[0]
+    second = pages[1]
+
+    edited_text = "edited text that must survive confirmation"
+    patch1 = client.patch(
+        f"/extractions/{extraction_id}/pages/{first['page_id']}/review",
+        json={"version": first["review_version"], "reviewed_text": edited_text},
+    )
+    assert patch1.status_code == 200
+
+    patch2 = client.patch(
+        f"/extractions/{extraction_id}/pages/{second['page_id']}/review",
+        json={"version": second["review_version"], "unchanged": True},
+    )
+    assert patch2.status_code == 200
+
+    review_before = client.get(f"/extractions/{extraction_id}/review").json()
+    confirm = client.post(
+        f"/extractions/{extraction_id}/confirmation",
+        headers={"If-Match": str(review_before["review_version"])},
+    )
+    assert confirm.status_code == 200
+
+    extraction_after = client.get(f"/extractions/{extraction_id}").json()
+    edited_page = next(
+        page for page in extraction_after["pages"] if page["page_id"] == first["page_id"]
+    )
+    assert edited_page["reviewed_text"] == edited_text
+    assert edited_page["final_text_preview"] == edited_text[:80]
+
+    review_after = client.get(f"/extractions/{extraction_id}/review").json()
+    edited_review_page = next(
+        page for page in review_after["pages"] if page["page_id"] == first["page_id"]
+    )
+    assert edited_review_page["reviewed_text"] == edited_text
+    assert edited_review_page["final_text_preview"] == edited_text[:80]
+
+
+def test_raw_database_never_stores_plaintext_review_or_confirmation_text(
+    sqlite_test_engine,
+) -> None:
+    extraction = _post_image_extraction()
+    extraction_id = extraction["extraction_id"]
+    pages = client.get(f"/extractions/{extraction_id}/review").json()["pages"]
+    first = pages[0]
+    second = pages[1]
+
+    edited_text = "매우 민감한 수정 본문 내용입니다"
+    patch1 = client.patch(
+        f"/extractions/{extraction_id}/pages/{first['page_id']}/review",
+        json={"version": first["review_version"], "reviewed_text": edited_text},
+    )
+    assert patch1.status_code == 200
+    patch2 = client.patch(
+        f"/extractions/{extraction_id}/pages/{second['page_id']}/review",
+        json={"version": second["review_version"], "unchanged": True},
+    )
+    assert patch2.status_code == 200
+
+    review_before = client.get(f"/extractions/{extraction_id}/review").json()
+    confirm = client.post(
+        f"/extractions/{extraction_id}/confirmation",
+        headers={"If-Match": str(review_before["review_version"])},
+    )
+    assert confirm.status_code == 200
+
+    with sqlite_test_engine.connect() as conn:
+        page_rows = conn.execute(
+            text("SELECT extra_data FROM extraction_pages WHERE extraction_id = :id"),
+            {"id": extraction_id},
+        ).fetchall()
+        extraction_row = conn.execute(
+            text("SELECT extra_data FROM extractions WHERE id = :id"),
+            {"id": extraction_id},
+        ).fetchone()
+
+    assert page_rows
+    for row in page_rows:
+        assert edited_text not in row[0]
+        assert "text_encrypted" in row[0]
+    assert extraction_row is not None
+    assert edited_text not in extraction_row[0]
+    assert "final_text_encrypted" in extraction_row[0]
+    assert "ciphertext" in extraction_row[0]

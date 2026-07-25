@@ -5,6 +5,7 @@ from uuid import uuid4
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.evidence_linking import calculate_snapshot_hash
+from backend.app.services.nested_json_encryption import encrypt_confirmation_snapshot
 from backend.app.services.scalar_encryption import encrypt_clause_body
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.tests.support import TEST_USER_ID
@@ -59,6 +60,27 @@ def test_analysis_job_fails_when_evidence_does_not_match_snapshot(db_session):
     body = "계약의 목적은 테스트 목적입니다."
     document, clause = _fake_document_and_clause(db_session, document_id, body)
 
+    plaintext_snapshot = [
+        {
+            "page_id": "1",
+            "page_number": 1,
+            "final_text": "전혀 다른 텍스트입니다.",
+            "text_source": "original",
+            "text_changed": False,
+            "method": "ocr",
+            "warnings": [],
+            "blocks": [],
+        }
+    ]
+    keyring = get_encryption_keyring()
+    encrypted_snapshot = encrypt_confirmation_snapshot(
+        plaintext_snapshot,
+        extraction_id=document_id,
+        owner_id=TEST_USER_ID,
+        snapshot_version=1,
+        keyring=keyring,
+    )
+
     extraction = Extraction(
         id=document_id,
         owner_id=TEST_USER_ID,
@@ -71,23 +93,10 @@ def test_analysis_job_fails_when_evidence_does_not_match_snapshot(db_session):
         warnings=[],
         requires_user_review=False,
         extra_data={
-            "confirmation_snapshot": [
-                {
-                    "page_number": 1,
-                    "final_text": "전혀 다른 텍스트입니다.",
-                    "blocks": [
-                        {
-                            "block_id": "p1-b1",
-                            "text": "전혀 다른 텍스트입니다.",
-                            "start_in_page_offset": 0,
-                            "end_in_page_offset": 11,
-                        }
-                    ],
-                }
-            ],
-            "confirmation_checksum": calculate_snapshot_hash([
-                {"page_number": 1, "final_text": "전혀 다른 텍스트입니다.", "blocks": []}
-            ]),
+            "confirmation_snapshot": encrypted_snapshot,
+            "confirmation_checksum": calculate_snapshot_hash(
+                [{"page_number": 1, "final_text": "전혀 다른 텍스트입니다.", "blocks": []}]
+            ),
             "snapshot_version": 1,
         },
     )
