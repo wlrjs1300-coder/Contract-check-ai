@@ -27,6 +27,7 @@ from backend.app.services.scalar_encryption import (
     decrypt_clause_body,
 )
 from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
+from backend.app.services.analysis_result_encryption import encrypt_analysis_value
 from backend.app.services.analysis_provider_contract import (
     AnalysisClauseInput,
     AnalysisProviderRequest,
@@ -760,9 +761,15 @@ def run_analysis_pipeline(
                         result_data.expert_review_recommended
                     ),
                     extra_data={
-                        "analysis_value": _to_customer_value_payload(
-                            result_data=result_data,
-                            evidence=evidence,
+                        "analysis_value": encrypt_analysis_value(
+                            _to_customer_value_payload(
+                                result_data=result_data,
+                                evidence=evidence,
+                            ),
+                            analysis_job_id=job.id,
+                            clause_record_id=clause.id,
+                            owner_id=document_owner_id,
+                            keyring=keyring,
                         ),
                         "evidence": evidence,
                         "evidence_snapshot_hash": snapshot_hash,

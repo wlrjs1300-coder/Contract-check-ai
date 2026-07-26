@@ -121,3 +121,16 @@ v0.7.5는 설계뿐 아니라 코드, migration, 테스트까지 구현한다. �
 - multi-region rotation orchestration
 - 소유권 이전 transaction과 rollback 설계
 
+## PR-4 Addendum: analysis_value encryption
+
+- Implemented scope: sensitive natural-language fields under `AnalysisResultItem.extra_data["analysis_value"]` are now encrypted with application-level envelope JSON.
+- Encrypted fields in this PR:
+  - `title`, `risk_reason`, `practical_impact`, `recommendation`, `expert_review_summary`
+  - `questions_to_ask[*].question`, `questions_to_ask[*].purpose`
+  - `negotiation_suggestions[*].objective`, `.suggested_change`, `.fallback_option`
+  - `extracted_facts[*].label`, `.value`
+- Strict schema for both encryption and decryption is enforced; malformed, dual-write, and legacy plaintext rows fail closed.
+- Kept in plaintext: enum, severity, action priority, offset/hash/confidence/boolean fields, evidence references, normalized metadata.
+- AAD composition for this PR: `resource_type`, canonical `record_id` (`analysis_job_id`, `clause_record_id`, and nested item id), `field_name`, `owner_id`, `schema_version=analysis-result-v1`.
+- Migration impact: nested JSON value-shape change only; no additional Alembic revision required for this PR.
+- This PR does not include evidence source text/excerpt, Document filename/display titles, or key rotation tasks; those remain out of scope.
