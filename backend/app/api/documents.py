@@ -19,6 +19,7 @@ from backend.app.db.models import User
 from backend.app.services.clause_splitter import split_clauses
 from backend.app.services.evidence_linking import calculate_snapshot_hash
 from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
+from backend.app.services.analysis_result_encryption import decrypt_analysis_value
 from backend.app.services.scalar_encryption import (
     ScalarEncryptionError,
     ScalarDecryptionError,
@@ -95,18 +96,52 @@ def _snapshot_hash(snapshot: list[dict[str, object]]) -> str:
     return calculate_snapshot_hash(snapshot)
 
 
-def _analysis_value(item: AnalysisResultItem) -> dict[str, object]:
-    extra = item.extra_data or {}
-    analysis_value = extra.get("analysis_value")
-    if isinstance(analysis_value, dict):
-        return analysis_value
-    return {}
+def _decrypt_analysis_values(
+    items: list[AnalysisResultItem],
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[int, dict[str, object]]:
+    """Decrypt each item's analysis_value once so repeated lookups (summary
+    aggregation and per-item serialization) don't re-decrypt the same row."""
+    values: dict[int, dict[str, object]] = {}
+    for item in items:
+        extra = item.extra_data or {}
+        raw_value = extra.get("analysis_value")
+        if raw_value is None:
+            values[item.id] = {}
+            continue
+        try:
+            if not isinstance(raw_value, dict):
+                raise ScalarDecryptionError("Invalid analysis_value payload.")
+            values[item.id] = decrypt_analysis_value(
+                raw_value,
+                analysis_job_id=item.analysis_job_id,
+                clause_record_id=item.clause_record_id,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+        except ScalarDecryptionError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Stored encrypted data is unavailable.",
+            ) from exc
+    return values
+
+
+def _analysis_value(
+    item: AnalysisResultItem,
+    *,
+    values_by_item_id: dict[int, dict[str, object]],
+) -> dict[str, object]:
+    return values_by_item_id.get(item.id, {})
 
 
 def _analysis_summary_from_items(
     *,
     items: list[AnalysisResultItem],
     current_snapshot_hash: str | None,
+    values_by_item_id: dict[int, dict[str, object]],
 ) -> dict[str, object]:
     severity_order = ["critical", "high", "medium", "low", "info"]
     action_priority_order = [
@@ -147,7 +182,7 @@ def _analysis_summary_from_items(
             "snapshot_stale": False,
         }
 
-    severities = [str(_analysis_value(item).get("severity", "info")) for item in items]
+    severities = [str(_analysis_value(item, values_by_item_id=values_by_item_id).get("severity", "info")) for item in items]
     critical = sum(1 for severity in severities if severity == "critical")
     high = sum(1 for severity in severities if severity == "high")
     medium = sum(1 for severity in severities if severity == "medium")
@@ -173,11 +208,11 @@ def _analysis_summary_from_items(
         items,
         key=lambda item: (
             severity_rank.get(
-                str(_analysis_value(item).get("severity", "info")),
+                str(_analysis_value(item, values_by_item_id=values_by_item_id).get("severity", "info")),
                 0,
             ),
             action_rank.get(
-                str(_analysis_value(item).get("action_priority", "informational")),
+                str(_analysis_value(item, values_by_item_id=values_by_item_id).get("action_priority", "informational")),
                 0,
             ),
             str(item.id),
@@ -186,11 +221,11 @@ def _analysis_summary_from_items(
     top_priorities = [
         {
             "finding_id": str(
-                _analysis_value(item).get("finding_id") or item.id
+                _analysis_value(item, values_by_item_id=values_by_item_id).get("finding_id") or item.id
             ),
-            "severity": str(_analysis_value(item).get("severity", "info")),
-            "title": str(_analysis_value(item).get("title") or item.clause.title or item.id),
-            "action_priority": str(_analysis_value(item).get("action_priority", "informational")),
+            "severity": str(_analysis_value(item, values_by_item_id=values_by_item_id).get("severity", "info")),
+            "title": str(_analysis_value(item, values_by_item_id=values_by_item_id).get("title") or item.clause.title or item.id),
+            "action_priority": str(_analysis_value(item, values_by_item_id=values_by_item_id).get("action_priority", "informational")),
         }
         for item in sorted_priorities[:3]
     ]
@@ -201,7 +236,7 @@ def _analysis_summary_from_items(
     missing_terms_count = 0
     ambiguity_count = 0
     for item in items:
-        value = _analysis_value(item)
+        value = _analysis_value(item, values_by_item_id=values_by_item_id)
         for fact in value.get("extracted_facts", []):
             if not isinstance(fact, dict):
                 continue
@@ -302,8 +337,9 @@ def _serialize_analysis_result_item(
     current_snapshot_hash: str | None,
     owner_id: str,
     keyring: EncryptionKeyring,
+    values_by_item_id: dict[int, dict[str, object]],
 ) -> dict[str, object]:
-    value = _analysis_value(item)
+    value = _analysis_value(item, values_by_item_id=values_by_item_id)
     summary = _resolve_analysis_result_summary(
         item,
         owner_id=owner_id,
@@ -568,18 +604,25 @@ def get_analysis_results(
         key=lambda item: item.clause.ordinal,
     )
 
+    values_by_item_id = _decrypt_analysis_values(
+        items,
+        owner_id=current_user.id,
+        keyring=keyring,
+    )
     item_payloads = [
         _serialize_analysis_result_item(
             item=item,
             current_snapshot_hash=current_snapshot_hash,
             owner_id=current_user.id,
             keyring=keyring,
+            values_by_item_id=values_by_item_id,
         )
         for item in items
     ]
     analysis_summary = _analysis_summary_from_items(
         items=items,
         current_snapshot_hash=current_snapshot_hash,
+        values_by_item_id=values_by_item_id,
     )
 
     return {
