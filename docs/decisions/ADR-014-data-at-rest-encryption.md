@@ -134,3 +134,14 @@ v0.7.5는 설계뿐 아니라 코드, migration, 테스트까지 구현한다. �
 - AAD composition for this PR: `resource_type`, canonical `record_id` (`analysis_job_id`, `clause_record_id`, and nested item id), `field_name`, `owner_id`, `schema_version=analysis-result-v1`.
 - Migration impact: nested JSON value-shape change only; no additional Alembic revision required for this PR.
 - This PR does not include evidence source text/excerpt, Document filename/display titles, or key rotation tasks; those remain out of scope.
+## PR-5 Addendum: Analysis Evidence source text
+
+- Final Evidence stores `source_text_encrypted` only in both retained copies.
+- Evidence has a dedicated strict schema; metadata stays cleartext and legacy,
+  mixed, unknown, or malformed payloads fail closed.
+- AAD uses resource `analysis_result_evidence`, canonical job/clause/evidence
+  identity, field `source_text`, verified owner ID, and `analysis-evidence-v1`.
+- Validation remains plaintext-before-encryption; API decryption occurs after
+  ownership checks. Snapshot hash and stale contracts are unchanged.
+- Duplicate Evidence removal and the remaining filename/title, rotation, and
+  backfill work are follow-up scope.
