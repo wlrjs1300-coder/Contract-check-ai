@@ -1,5 +1,6 @@
 import re
 import hashlib
+from copy import deepcopy
 from datetime import datetime
 
 
@@ -28,6 +29,9 @@ from backend.app.services.scalar_encryption import (
 )
 from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
 from backend.app.services.analysis_result_encryption import encrypt_analysis_value
+from backend.app.services.analysis_evidence_encryption import (
+    encrypt_analysis_evidence_list,
+)
 from backend.app.services.analysis_provider_contract import (
     AnalysisClauseInput,
     AnalysisProviderRequest,
@@ -745,6 +749,19 @@ def run_analysis_pipeline(
 
             _ensure_derived_fields_have_evidence(result_data, evidence)
 
+            encrypted_evidence = encrypt_analysis_evidence_list(
+                evidence,
+                analysis_job_id=job.id,
+                clause_record_id=clause.id,
+                owner_id=document_owner_id,
+                keyring=keyring,
+            )
+            analysis_value = _to_customer_value_payload(
+                result_data=result_data,
+                evidence=evidence,
+            )
+            analysis_value["evidence"] = encrypted_evidence
+
             job.result_items.append(
                 AnalysisResultItem(
                     clause_record_id=clause.id,
@@ -762,16 +779,13 @@ def run_analysis_pipeline(
                     ),
                     extra_data={
                         "analysis_value": encrypt_analysis_value(
-                            _to_customer_value_payload(
-                                result_data=result_data,
-                                evidence=evidence,
-                            ),
+                            analysis_value,
                             analysis_job_id=job.id,
                             clause_record_id=clause.id,
                             owner_id=document_owner_id,
                             keyring=keyring,
                         ),
-                        "evidence": evidence,
+                        "evidence": deepcopy(encrypted_evidence),
                         "evidence_snapshot_hash": snapshot_hash,
                         "snapshot_version": snapshot_version,
                     },

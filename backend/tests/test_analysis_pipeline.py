@@ -6,6 +6,9 @@ from backend.app.core.encryption_config import get_encryption_keyring
 
 from backend.app.db.models import AnalysisJob, Clause, Document
 from backend.app.services.analysis_provider import AnalysisProviderInput
+from backend.app.services.analysis_evidence_encryption import (
+    decrypt_analysis_evidence_list,
+)
 from backend.app.services.analysis_pipeline import (
     run_analysis_pipeline,
     validate_reference_id,
@@ -149,9 +152,25 @@ def test_run_analysis_pipeline_evidence_source_text_is_not_empty(
     run_analysis_pipeline(db_session, job, [clause])
 
     assert job.status == "completed"
-    evidence = job.result_items[0].extra_data.get("evidence")
+    item = job.result_items[0]
+    evidence = item.extra_data.get("evidence")
     assert evidence
-    assert evidence[0]["source_text"] == "Synthetic clause body."
+    assert "source_text" not in evidence[0]
+    assert "source_text_encrypted" in evidence[0]
+    nested_evidence = item.extra_data["analysis_value"]["evidence"]
+    assert nested_evidence == evidence
+    assert nested_evidence is not evidence
+    assert "source_text" not in nested_evidence[0]
+    assert "source_text_encrypted" in nested_evidence[0]
+    assert "Synthetic clause body." not in str(item.extra_data)
+    decrypted = decrypt_analysis_evidence_list(
+        evidence,
+        analysis_job_id=job.id,
+        clause_record_id=clause.id,
+        owner_id=TEST_USER_ID,
+        keyring=get_encryption_keyring(),
+    )
+    assert decrypted[0]["source_text"] == "Synthetic clause body."
 
 
 def test_run_analysis_pipeline_marks_job_failed(

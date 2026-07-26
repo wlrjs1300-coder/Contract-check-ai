@@ -20,6 +20,9 @@ from backend.app.services.clause_splitter import split_clauses
 from backend.app.services.evidence_linking import calculate_snapshot_hash
 from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
 from backend.app.services.analysis_result_encryption import decrypt_analysis_value
+from backend.app.services.analysis_evidence_encryption import (
+    decrypt_analysis_evidence_list,
+)
 from backend.app.services.scalar_encryption import (
     ScalarEncryptionError,
     ScalarDecryptionError,
@@ -114,8 +117,49 @@ def _decrypt_analysis_values(
         try:
             if not isinstance(raw_value, dict):
                 raise ScalarDecryptionError("Invalid analysis_value payload.")
-            values[item.id] = decrypt_analysis_value(
+            decrypted_value = decrypt_analysis_value(
                 raw_value,
+                analysis_job_id=item.analysis_job_id,
+                clause_record_id=item.clause_record_id,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+            raw_evidence = decrypted_value.get("evidence", [])
+            if not isinstance(raw_evidence, list):
+                raise ScalarDecryptionError("Invalid evidence list.")
+            decrypted_value["evidence"] = decrypt_analysis_evidence_list(
+                raw_evidence,
+                analysis_job_id=item.analysis_job_id,
+                clause_record_id=item.clause_record_id,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+            values[item.id] = decrypted_value
+        except ScalarDecryptionError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Stored encrypted data is unavailable.",
+            ) from exc
+    return values
+
+
+def _decrypt_top_level_evidence(
+    items: list[AnalysisResultItem],
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[int, list[dict[str, object]]]:
+    values: dict[int, list[dict[str, object]]] = {}
+    for item in items:
+        raw_evidence = (item.extra_data or {}).get("evidence")
+        if raw_evidence is None:
+            values[item.id] = []
+            continue
+        try:
+            if not isinstance(raw_evidence, list):
+                raise ScalarDecryptionError("Invalid evidence list.")
+            values[item.id] = decrypt_analysis_evidence_list(
+                raw_evidence,
                 analysis_job_id=item.analysis_job_id,
                 clause_record_id=item.clause_record_id,
                 owner_id=owner_id,
@@ -338,6 +382,7 @@ def _serialize_analysis_result_item(
     owner_id: str,
     keyring: EncryptionKeyring,
     values_by_item_id: dict[int, dict[str, object]],
+    top_level_evidence_by_item_id: dict[int, list[dict[str, object]]],
 ) -> dict[str, object]:
     value = _analysis_value(item, values_by_item_id=values_by_item_id)
     summary = _resolve_analysis_result_summary(
@@ -367,7 +412,10 @@ def _serialize_analysis_result_item(
         "recommendation": value.get("recommendation", summary),
         "expert_review_reason_codes": value.get("expert_review_reason_codes", []),
         "expert_review_summary": value.get("expert_review_summary", ""),
-        "evidence": value.get("evidence", item.extra_data.get("evidence", [])),
+        "evidence": value.get(
+            "evidence",
+            top_level_evidence_by_item_id.get(item.id, []),
+        ),
         "extracted_facts": value.get("extracted_facts", []),
         "validation_status": value.get("validation_status", "verified"),
         "is_stale": _is_snapshot_stale(item, current_snapshot_hash),
@@ -609,6 +657,11 @@ def get_analysis_results(
         owner_id=current_user.id,
         keyring=keyring,
     )
+    top_level_evidence_by_item_id = _decrypt_top_level_evidence(
+        items,
+        owner_id=current_user.id,
+        keyring=keyring,
+    )
     item_payloads = [
         _serialize_analysis_result_item(
             item=item,
@@ -616,6 +669,7 @@ def get_analysis_results(
             owner_id=current_user.id,
             keyring=keyring,
             values_by_item_id=values_by_item_id,
+            top_level_evidence_by_item_id=top_level_evidence_by_item_id,
         )
         for item in items
     ]
