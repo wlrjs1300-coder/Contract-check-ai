@@ -6,9 +6,6 @@ import hmac
 import os
 from dataclasses import dataclass, field
 
-from backend.app.core.auth import normalize_email
-
-
 class EmailLookupConfigurationError(RuntimeError):
     """Raised when the email lookup key is unavailable or invalid."""
 
@@ -42,7 +39,7 @@ def build_email_lookup_hash(
 ) -> str:
     if type(email) is not str:
         raise ValueError("Invalid email value.")
-    normalized = normalize_email(email)
+    normalized = email.strip().casefold()
     if not normalized:
         raise ValueError("Invalid email value.")
     key = lookup_key or get_email_lookup_key()

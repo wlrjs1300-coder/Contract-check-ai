@@ -27,6 +27,15 @@ from backend.app.services.document_metadata_encryption import (
     decrypt_unclassified_sections,
     encrypt_unclassified_sections,
 )
+from backend.app.services.scalar_metadata_encryption import (
+    decrypt_clause_title,
+    decrypt_document_filename,
+    encrypt_clause_title,
+    encrypt_document_filename,
+)
+from backend.app.services.scalar_metadata_transition import (
+    resolve_transition_scalar,
+)
 from backend.app.services.scalar_encryption import (
     ScalarEncryptionError,
     ScalarDecryptionError,
@@ -55,6 +64,19 @@ def _serialize_clause(
             owner_id=owner_id,
             keyring=keyring,
         )
+        title = resolve_transition_scalar(
+            clause.title,
+            decrypt_clause_title(
+                clause.title_encrypted,
+                clause_id=clause.id,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+            if clause.title_encrypted is not None
+            else None,
+            encrypted_present=clause.title_encrypted is not None,
+            allow_missing=True,
+        ).value
     except ScalarDecryptionError as exc:
         raise HTTPException(
             status_code=500,
@@ -68,7 +90,7 @@ def _serialize_clause(
         "ordinal": clause.ordinal,
         "marker": clause.marker,
         "clause_type": clause.clause_type,
-        "title": clause.title,
+        "title": title,
         "body": body,
         "warnings": clause.warnings,
     }
@@ -82,6 +104,19 @@ def _serialize_document(
     clauses = sorted(document.clauses, key=lambda clause: clause.ordinal)
     owner_id = document.owner_id
     try:
+        filename = resolve_transition_scalar(
+            document.filename,
+            decrypt_document_filename(
+                document.filename_encrypted,
+                record_id=document.id,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+            if document.filename_encrypted is not None
+            else None,
+            encrypted_present=document.filename_encrypted is not None,
+            allow_missing=False,
+        ).value
         unclassified_sections = decrypt_unclassified_sections(
             document.unclassified_sections,
             document_id=document.id,
@@ -96,7 +131,7 @@ def _serialize_document(
 
     return {
         "document_id": document.id,
-        "filename": document.filename,
+        "filename": filename,
         "content_type": document.content_type,
         "size_bytes": document.size_bytes,
         "character_count": document.character_count,
@@ -519,6 +554,12 @@ async def upload_document(
     clause_result = split_clauses(text, document_id)
     keyring = get_encryption_keyring()
     try:
+        filename_encrypted = encrypt_document_filename(
+            filename,
+            record_id=document_id,
+            owner_id=current_user.id,
+            keyring=keyring,
+        )
         unclassified_sections = encrypt_unclassified_sections(
             clause_result["unclassified_sections"],
             document_id=document_id,
@@ -534,6 +575,7 @@ async def upload_document(
     document = Document(
         id=document_id,
         filename=filename,
+        filename_encrypted=filename_encrypted,
         owner_id=current_user.id,
         content_type=file.content_type,
         size_bytes=len(content),
@@ -547,6 +589,13 @@ async def upload_document(
         clause_id = str(uuid4())
         body = str(clause_data["body"])
         try:
+            title = clause_data["title"]
+            title_encrypted = encrypt_clause_title(
+                title,
+                clause_id=clause_id,
+                owner_id=current_user.id,
+                keyring=keyring,
+            )
             body_encrypted = encrypt_clause_body(
                 body,
                 clause_id=clause_id,
@@ -568,6 +617,7 @@ async def upload_document(
                 marker=clause_data["marker"],
                 clause_type=clause_data["clause_type"],
                 title=clause_data["title"],
+                title_encrypted=title_encrypted,
                 body_encrypted=body_encrypted,
                 warnings=clause_data["warnings"],
             )

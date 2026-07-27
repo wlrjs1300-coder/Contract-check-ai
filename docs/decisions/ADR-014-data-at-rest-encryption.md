@@ -152,6 +152,19 @@ v0.7.5는 설계뿐 아니라 코드, migration, 테스트까지 구현한다. �
 
 ## Scalar metadata additive foundation
 
+## Scalar metadata transition
+
+The application now temporarily dual-writes plaintext and encrypted scalar
+metadata. Reads prefer authenticated ciphertext, require dual values to match,
+and allow explicitly identifiable plaintext-only legacy rows during the
+transition. Mismatch, malformed envelope, unknown key, wrong AAD, and partial
+email hash states fail closed. Ownership is resolved before API decryption.
+
+Email registration writes the normalized plaintext, encrypted email, and
+keyed lookup hash in one transaction. Login queries the HMAC hash first and
+uses plaintext lookup only for legacy rows without a hash. This dual-write and
+legacy fallback are temporary migration mechanisms, not the final policy.
+
 PR-1 adds reusable AES-256-GCM helpers for user email, document filename,
 extraction display filename, and clause title using canonical
 `scalar-metadata-v1` AAD. It also adds a separate HMAC-SHA-256 email lookup
