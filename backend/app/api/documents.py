@@ -23,6 +23,10 @@ from backend.app.services.analysis_result_encryption import decrypt_analysis_val
 from backend.app.services.analysis_evidence_encryption import (
     decrypt_analysis_evidence_list,
 )
+from backend.app.services.document_metadata_encryption import (
+    decrypt_unclassified_sections,
+    encrypt_unclassified_sections,
+)
 from backend.app.services.scalar_encryption import (
     ScalarEncryptionError,
     ScalarDecryptionError,
@@ -77,6 +81,18 @@ def _serialize_document(
 ) -> dict[str, object]:
     clauses = sorted(document.clauses, key=lambda clause: clause.ordinal)
     owner_id = document.owner_id
+    try:
+        unclassified_sections = decrypt_unclassified_sections(
+            document.unclassified_sections,
+            document_id=document.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
 
     return {
         "document_id": document.id,
@@ -90,7 +106,7 @@ def _serialize_document(
             _serialize_clause(clause, owner_id=owner_id, keyring=keyring)
             for clause in clauses
         ],
-        "unclassified_sections": document.unclassified_sections,
+        "unclassified_sections": unclassified_sections,
         "document_warnings": document.document_warnings,
     }
 
@@ -501,6 +517,19 @@ async def upload_document(
 
     document_id = str(uuid4())
     clause_result = split_clauses(text, document_id)
+    keyring = get_encryption_keyring()
+    try:
+        unclassified_sections = encrypt_unclassified_sections(
+            clause_result["unclassified_sections"],
+            document_id=document_id,
+            owner_id=current_user.id,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to prepare document content.",
+        ) from exc
 
     document = Document(
         id=document_id,
@@ -510,11 +539,10 @@ async def upload_document(
         size_bytes=len(content),
         character_count=len(text),
         status="processed",
-        unclassified_sections=clause_result["unclassified_sections"],
+        unclassified_sections=unclassified_sections,
         document_warnings=clause_result["document_warnings"],
     )
 
-    keyring = get_encryption_keyring()
     for clause_data in clause_result["clauses"]:
         clause_id = str(uuid4())
         body = str(clause_data["body"])

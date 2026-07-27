@@ -14,8 +14,12 @@ from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.analysis_provider_factory import create_analysis_provider
 from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
 from backend.app.services.scalar_encryption import (
+    ScalarEncryptionError,
     ScalarDecryptionError,
     encrypt_clause_body,
+)
+from backend.app.services.document_metadata_encryption import (
+    encrypt_unclassified_sections,
 )
 
 
@@ -222,6 +226,18 @@ def _load_or_create_analysis_document(
     clauses_data = split_result["clauses"]
 
     if document is None:
+        try:
+            unclassified_sections = encrypt_unclassified_sections(
+                split_result["unclassified_sections"],
+                document_id=extraction.id,
+                owner_id=current_user_id,
+                keyring=encryption_keyring,
+            )
+        except ScalarEncryptionError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to prepare document content.",
+            ) from exc
         document = Document(
             id=extraction.id,
             owner_id=current_user_id,
@@ -230,7 +246,7 @@ def _load_or_create_analysis_document(
             size_bytes=extraction.size_bytes,
             character_count=int(extraction_data.get("final_total_text_length", 0)),
             status="processed",
-            unclassified_sections=[],
+            unclassified_sections=unclassified_sections,
             document_warnings=extraction.warnings,
         )
         db.add(document)

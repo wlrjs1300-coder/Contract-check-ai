@@ -148,6 +148,13 @@ v0.7.5는 설계뿐 아니라 코드, migration, 테스트까지 구현한다. �
 
 ## PR-6 Addendum: canonical Evidence location
 
+## Sensitive storage hardening addendum
+
+- `Document.unclassified_sections` is stored as an encrypted-only strict JSON list. Each item uses `resource_type=document_unclassified_section`, the document ID, owner ID, `field_name=text`, item index, and `document-metadata-v1` in canonical AAD. Reordering or swapping items therefore fails closed.
+- Extracted fact `normalized_value`, `date_value`, `amount_value`, `duration_value`, and `obligation_party` are encrypted-only. Their AAD retains the analysis job, clause record, stable fact ID, owner, and field name; `null` remains `null`.
+- Provider execution exceptions retain payload byte length only, never raw request or response payload.
+- These are JSON value and exception-boundary changes, so no Alembic revision is required. User email, filename/display filename, clause title, operational backfill, and rotation re-encryption remain incomplete follow-up work.
+
 - The canonical persisted Evidence list is
   `AnalysisResultItem.extra_data["analysis_value"]["evidence"]`.
 - New writes omit top-level `extra_data["evidence"]`; API fallback and duplicate
