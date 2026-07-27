@@ -14,6 +14,7 @@ from backend.app.services.analysis_evidence_encryption import (
     decrypt_analysis_evidence_list,
 )
 from backend.tests.support import TEST_USER_ID
+from backend.tests.durable_job_support import run_pending_job
 
 
 client = TestClient(app)
@@ -40,6 +41,7 @@ def _create_result_item(
     db.expire_all()
     job = db.scalar(select(AnalysisJob).where(AnalysisJob.id == job_id))
     assert job is not None
+    job = run_pending_job(db, job_id)
     assert len(job.result_items) == 1
     return document_id, job.result_items[0]
 

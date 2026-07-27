@@ -1,3 +1,6 @@
+import json
+from datetime import datetime
+from hashlib import sha256
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -10,8 +13,7 @@ from backend.app.core.auth import get_current_user
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction, User
 from backend.app.services.clause_splitter import split_clauses_with_snapshot
-from backend.app.services.analysis_pipeline import run_analysis_pipeline
-from backend.app.services.analysis_provider_factory import create_analysis_provider
+from backend.app.services.analysis_provider_factory import resolve_provider_name
 from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
 from backend.app.services.scalar_encryption import (
     ScalarEncryptionError,
@@ -29,6 +31,7 @@ from backend.app.services.scalar_metadata_encryption import (
 
 
 router = APIRouter(tags=["analysis-jobs"])
+ANALYSIS_CONTRACT_VERSION = "analysis-provider-request.v1"
 
 
 def _parse_if_match_version(if_match: str | None) -> int:
@@ -60,6 +63,77 @@ def _snapshot_checksum(items: list[dict[str, object]]) -> str:
         hasher.update(str(item["final_text"]).encode("utf-8"))
         hasher.update(b"\n")
     return hasher.hexdigest()
+
+
+def _request_fingerprint(
+    *,
+    owner_id: str,
+    document_id: str,
+    source_type: str,
+    source_id: str,
+    source_revision: int | None,
+    source_hashes: list[str],
+) -> str:
+    payload = {
+        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+        "document_id": document_id,
+        "owner_id": owner_id,
+        "provider": resolve_provider_name(),
+        "source_hashes": sorted(source_hashes),
+        "source_id": source_id,
+        "source_revision": source_revision,
+        "source_type": source_type,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _enqueue_analysis_job(
+    db: Session,
+    *,
+    document_id: str,
+    request_fingerprint: str,
+) -> AnalysisJob:
+    existing = db.scalar(
+        select(AnalysisJob).where(
+            AnalysisJob.active_dedupe_key == request_fingerprint,
+            AnalysisJob.status.in_(("pending", "running")),
+        )
+    )
+    if existing is not None:
+        return existing
+
+    job = AnalysisJob(
+        id=str(uuid4()),
+        document_id=document_id,
+        status="pending",
+        attempt_count=0,
+        max_attempts=3,
+        available_at=datetime.utcnow(),
+        request_fingerprint=request_fingerprint,
+        active_dedupe_key=request_fingerprint,
+    )
+    db.add(job)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalar(
+            select(AnalysisJob).where(
+                AnalysisJob.active_dedupe_key == request_fingerprint,
+                AnalysisJob.status.in_(("pending", "running")),
+            )
+        )
+        if existing is None:
+            raise
+        return existing
+    db.refresh(job)
+    return job
 
 
 def _get_extraction_ready_for_analysis(
@@ -342,24 +416,18 @@ def create_analysis_job(
             detail="Document not found.",
         )
 
-    job = AnalysisJob(
-        id=str(uuid4()),
+    fingerprint = _request_fingerprint(
+        owner_id=current_user.id,
         document_id=document_id,
-        status="queued",
+        source_type="document",
+        source_id=document_id,
+        source_revision=None,
+        source_hashes=[clause.source_hash for clause in document.clauses],
     )
-
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    run_analysis_pipeline(
-        db=db,
-        job=job,
-        clauses=sorted(
-            document.clauses,
-            key=lambda clause: clause.ordinal,
-        ),
-        provider=create_analysis_provider(),
+    job = _enqueue_analysis_job(
+        db,
+        document_id=document_id,
+        request_fingerprint=fingerprint,
     )
 
     return {"job_id": job.id, "document_id": job.document_id, "status": job.status}
@@ -397,20 +465,19 @@ def create_extraction_analysis_job(
             detail="stale_extraction_revision",
         )
 
-    job = AnalysisJob(
-        id=str(uuid4()),
+    extraction_data = extraction.extra_data or {}
+    fingerprint = _request_fingerprint(
+        owner_id=current_user.id,
         document_id=document_id,
-        status="queued",
+        source_type="extraction",
+        source_id=extraction.id,
+        source_revision=int(extraction_data["snapshot_version"]),
+        source_hashes=[clause.source_hash for clause in clauses],
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    run_analysis_pipeline(
-        db=db,
-        job=job,
-        clauses=clauses,
-        provider=create_analysis_provider(),
+    job = _enqueue_analysis_job(
+        db,
+        document_id=document_id,
+        request_fingerprint=fingerprint,
     )
 
     return {

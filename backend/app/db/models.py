@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.db.database import Base
@@ -104,6 +105,14 @@ class Clause(Base):
 
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
+    __table_args__ = (
+        Index("ix_analysis_jobs_status_available_at", "status", "available_at"),
+        Index("ix_analysis_jobs_status_lease_expires_at", "status", "lease_expires_at"),
+        UniqueConstraint(
+            "active_dedupe_key",
+            name="uq_analysis_jobs_active_dedupe_key",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     document_id: Mapped[str] = mapped_column(
@@ -111,6 +120,32 @@ class AnalysisJob(Base):
         index=True,
     )
     status: Mapped[str] = mapped_column(String(50))
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error_message_safe: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    request_fingerprint: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default=lambda: uuid4().hex + uuid4().hex,
+    )
+    active_dedupe_key: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     document: Mapped[Document] = relationship(back_populates="analysis_jobs")
