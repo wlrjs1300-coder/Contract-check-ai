@@ -48,14 +48,14 @@ class ProviderExecutionError(RuntimeError):
         message: str = "Provider execution failed.",
         attempt_number: int | None = None,
         request_id: str | None = None,
-        raw_payload: bytes | None = None,
+        payload_byte_length: int | None = None,
     ) -> None:
         super().__init__(message)
         self.reason_code = reason_code
         self.retryable = retryable
         self.attempt_number = attempt_number
         self.request_id = request_id
-        self.raw_payload = raw_payload
+        self.payload_byte_length = payload_byte_length
 
 
 class ProviderTimeoutError(ProviderExecutionError):
@@ -264,7 +264,7 @@ def execute_provider(
                         message="Provider request payload exceeded limit.",
                         attempt_number=attempt_number,
                         request_id=request.request_id,
-                        raw_payload=request_payload[:1024],
+                        payload_byte_length=len(request_payload),
                     )
 
                 raw = provider.analyze(request)  # type: ignore[union-attr]
@@ -278,7 +278,7 @@ def execute_provider(
                             message="Provider response payload exceeded limit.",
                             attempt_number=attempt_number,
                             request_id=request.request_id,
-                            raw_payload=response_payload[:1024],
+                            payload_byte_length=len(response_payload),
                         )
                     return raw
                 if isinstance(raw, AnalysisResultData):

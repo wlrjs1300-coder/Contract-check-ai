@@ -119,13 +119,13 @@ _FACT_ENCRYPTED_KEYS = frozenset(
         "fact_type",
         "label_encrypted",
         "value_encrypted",
-        "normalized_value",
+        "normalized_value_encrypted",
         "unit",
-        "date_value",
-        "amount_value",
+        "date_value_encrypted",
+        "amount_value_encrypted",
         "currency",
-        "duration_value",
-        "obligation_party",
+        "duration_value_encrypted",
+        "obligation_party_encrypted",
         "status",
         "evidence",
         "confidence_score",
@@ -478,12 +478,34 @@ def _encrypt_fact_list(
                 keyring=keyring,
             )
 
+        def _optional_field(field_name: str) -> dict[str, object] | None:
+            value = fact.get(field_name)
+            if value is None:
+                return None
+            return _field(field_name)
+
         encrypted_fact = dict(fact)
-        encrypted_fact.pop("label", None)
-        encrypted_fact.pop("value", None)
+        for field_name in (
+            "label",
+            "value",
+            "normalized_value",
+            "date_value",
+            "amount_value",
+            "duration_value",
+            "obligation_party",
+        ):
+            encrypted_fact.pop(field_name, None)
         encrypted_fact["fact_id"] = fact_id
         encrypted_fact["label_encrypted"] = _field("label")
         encrypted_fact["value_encrypted"] = _field("value")
+        for field_name in (
+            "normalized_value",
+            "date_value",
+            "amount_value",
+            "duration_value",
+            "obligation_party",
+        ):
+            encrypted_fact[f"{field_name}_encrypted"] = _optional_field(field_name)
         encrypted.append(encrypted_fact)
     return encrypted
 
@@ -523,12 +545,34 @@ def _decrypt_fact_list(
                 keyring=keyring,
             )
 
+        def _optional_field(field_name: str) -> str | None:
+            value = fact.get(f"{field_name}_encrypted")
+            if value is None:
+                return None
+            return _field(field_name)
+
         decrypted_fact = dict(fact)
-        decrypted_fact.pop("label_encrypted", None)
-        decrypted_fact.pop("value_encrypted", None)
+        for field_name in (
+            "label",
+            "value",
+            "normalized_value",
+            "date_value",
+            "amount_value",
+            "duration_value",
+            "obligation_party",
+        ):
+            decrypted_fact.pop(f"{field_name}_encrypted", None)
         decrypted_fact["fact_id"] = fact_id
         decrypted_fact["label"] = _field("label")
         decrypted_fact["value"] = _field("value")
+        for field_name in (
+            "normalized_value",
+            "date_value",
+            "amount_value",
+            "duration_value",
+            "obligation_party",
+        ):
+            decrypted_fact[field_name] = _optional_field(field_name)
         decrypted.append(decrypted_fact)
     return decrypted
 

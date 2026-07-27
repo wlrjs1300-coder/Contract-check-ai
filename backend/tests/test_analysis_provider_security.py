@@ -74,3 +74,16 @@ def test_request_context_is_kept_for_debug() -> None:
     )
     assert error.attempt_number == 2
     assert error.request_id == "req-secure"
+
+
+def test_provider_execution_error_repr_and_dict_do_not_expose_payload() -> None:
+    secret = b"raw-provider-secret"
+    error = ProviderExecutionError(
+        ProviderFailureReason.PROVIDER_REQUEST_TOO_LARGE,
+        retryable=False,
+        payload_byte_length=len(secret),
+    )
+    assert secret.decode() not in repr(error)
+    assert secret not in error.__dict__.values()
+    assert "raw_payload" not in error.__dict__
+    assert error.payload_byte_length == len(secret)

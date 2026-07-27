@@ -123,10 +123,17 @@ def test_encrypted_payload_never_contains_plaintext_text_fields() -> None:
     assert plaintext["negotiation_suggestions"][0]["objective"] not in str(encrypted)
 
     fact = encrypted["extracted_facts"][0]
-    assert "label" not in fact
-    assert "value" not in fact
-    assert fact["normalized_value"] == "1000000"
-    assert fact["amount_value"] == "1000000"
+    for field_name in (
+        "label",
+        "value",
+        "normalized_value",
+        "date_value",
+        "amount_value",
+        "duration_value",
+        "obligation_party",
+    ):
+        assert field_name not in fact
+        assert f"{field_name}_encrypted" in fact
 
 
 def test_same_plaintext_produces_different_ciphertext() -> None:
@@ -502,16 +509,67 @@ def test_raw_database_never_stores_plaintext_analysis_value_text(
         assert "objective" not in suggestion
         assert "objective_encrypted" in suggestion
     for fact in raw_value["extracted_facts"]:
-        assert "label" not in fact
-        assert "value" not in fact
-        assert "label_encrypted" in fact
-        assert "value_encrypted" in fact
+        for field_name in (
+            "label",
+            "value",
+            "normalized_value",
+            "date_value",
+            "amount_value",
+            "duration_value",
+            "obligation_party",
+        ):
+            assert field_name not in fact
+            assert f"{field_name}_encrypted" in fact
 
-    decrypted = decrypt_analysis_value(
-        raw_value,
-        analysis_job_id=job.id,
-        clause_record_id=clause.id,
-        owner_id=TEST_USER_ID,
-        keyring=keyring,
+
+def test_normalized_fact_ciphertext_rejects_cross_field_swap() -> None:
+    encrypted = encrypt_analysis_value(
+        _analysis_value(), keyring=_keyring(), **_identity()
     )
-    assert decrypted["title"]
+    fact = encrypted["extracted_facts"][0]
+    fact["date_value_encrypted"] = fact["amount_value_encrypted"]
+    with pytest.raises(ScalarDecryptionError):
+        decrypt_analysis_value(encrypted, keyring=_keyring(), **_identity())
+
+
+def test_normalized_fact_ciphertext_rejects_cross_fact_swap() -> None:
+    fact = _analysis_value()["extracted_facts"][0]
+    other = dict(fact)
+    other["fact_id"] = "f-2"
+    other["normalized_value"] = "different"
+    encrypted = encrypt_analysis_value(
+        _analysis_value(extracted_facts=[fact, other]),
+        keyring=_keyring(),
+        **_identity(),
+    )
+    encrypted["extracted_facts"][0]["normalized_value_encrypted"] = encrypted[
+        "extracted_facts"
+    ][1]["normalized_value_encrypted"]
+    with pytest.raises(ScalarDecryptionError):
+        decrypt_analysis_value(encrypted, keyring=_keyring(), **_identity())
+
+
+def test_normalized_fact_plaintext_legacy_fails_closed() -> None:
+    encrypted = encrypt_analysis_value(
+        _analysis_value(), keyring=_keyring(), **_identity()
+    )
+    fact = encrypted["extracted_facts"][0]
+    fact["normalized_value"] = "legacy plaintext"
+    with pytest.raises(ScalarDecryptionError):
+        decrypt_analysis_value(encrypted, keyring=_keyring(), **_identity())
+
+
+def test_normalized_fact_null_values_are_preserved() -> None:
+    fact = dict(_analysis_value()["extracted_facts"][0])
+    for field_name in (
+        "normalized_value",
+        "date_value",
+        "amount_value",
+        "duration_value",
+        "obligation_party",
+    ):
+        fact[field_name] = None
+    plaintext = _analysis_value(extracted_facts=[fact])
+    encrypted = encrypt_analysis_value(plaintext, keyring=_keyring(), **_identity())
+    decrypted = decrypt_analysis_value(encrypted, keyring=_keyring(), **_identity())
+    assert decrypted == plaintext

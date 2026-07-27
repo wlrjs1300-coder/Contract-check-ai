@@ -5,6 +5,7 @@ import pytest
 from backend.app.db.models import AnalysisJob, Clause, Document
 from backend.app.services.analysis_provider import AnalysisProviderInput
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
+from backend.app.services.analysis_result_encryption import decrypt_analysis_value
 from backend.app.services.analysis_result_schema import (
     ALLOWED_EXPERT_REVIEW_CODES,
     AnalysisResultData,
@@ -208,7 +209,25 @@ def test_pipeline_stores_normalized_extracted_facts(db_session) -> None:
 
     db_session.refresh(job)
     assert job.status == "completed"
-    analysis_value = job.result_items[0].extra_data["analysis_value"]
+    result_item = job.result_items[0]
+    raw_analysis_value = result_item.extra_data["analysis_value"]
+    for fact in raw_analysis_value["extracted_facts"]:
+        for field_name in (
+            "normalized_value",
+            "date_value",
+            "amount_value",
+            "duration_value",
+            "obligation_party",
+        ):
+            assert field_name not in fact
+            assert f"{field_name}_encrypted" in fact
+    analysis_value = decrypt_analysis_value(
+        raw_analysis_value,
+        analysis_job_id=job.id,
+        clause_record_id=result_item.clause_record_id,
+        owner_id=TEST_USER_ID,
+        keyring=get_encryption_keyring(),
+    )
 
     assert analysis_value["evidence"][0]["evidence_id"] == evidence_id
     assert analysis_value["extracted_facts"][0]["date_value"] == "2026-07-21"
