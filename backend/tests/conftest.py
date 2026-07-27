@@ -8,6 +8,10 @@ os.environ.setdefault("JWT_SECRET", "x" * 64)
 os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15")
 os.environ.setdefault("DATA_ENCRYPTION_ACTIVE_KEY_ID", "synthetic-key-v1")
 os.environ.setdefault(
+    "EMAIL_LOOKUP_HMAC_KEY",
+    base64.b64encode(bytes(range(64, 96))).decode("ascii"),
+)
+os.environ.setdefault(
     "DATA_ENCRYPTION_KEYS_JSON",
     json.dumps(
         [
