@@ -660,12 +660,14 @@ def run_analysis_pipeline(
         DEFAULT_PROVIDER_EXECUTION_POLICY
     ),
     keyring: EncryptionKeyring | None = None,
+    worker_managed: bool = False,
 ) -> None:
     if keyring is None:
         keyring = get_encryption_keyring()
 
-    job.status = "processing"
-    db.flush()
+    if not worker_managed:
+        job.status = "running"
+        db.flush()
 
     request_index = 0
     try:
@@ -799,15 +801,18 @@ def run_analysis_pipeline(
                 )
             )
 
-        job.status = "completed"
-        db.commit()
-        db.refresh(job)
+        if not worker_managed:
+            job.status = "completed"
+            db.commit()
+            db.refresh(job)
     except Exception:
         job_id = job.id
         db.rollback()
 
-        failed_job = db.get(AnalysisJob, job_id)
+        if worker_managed:
+            raise
 
+        failed_job = db.get(AnalysisJob, job_id)
         if failed_job is not None:
             failed_job.status = "failed"
             db.commit()
