@@ -14,6 +14,8 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    email_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_lookup_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auth_version: Mapped[int] = mapped_column(Integer, default=1)
@@ -38,6 +40,7 @@ class Document(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     filename: Mapped[str] = mapped_column(String(255))
+    filename_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer)
     character_count: Mapped[int] = mapped_column(Integer)
@@ -89,6 +92,7 @@ class Clause(Base):
     marker: Mapped[str] = mapped_column(String(50))
     clause_type: Mapped[str] = mapped_column(String(50))
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     body_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
 
@@ -151,6 +155,7 @@ class Extraction(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     filename_display: Mapped[str] = mapped_column(String(255))
+    filename_display_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_type: Mapped[str] = mapped_column(String(20))
     size_bytes: Mapped[int] = mapped_column(Integer)
     page_count: Mapped[int] = mapped_column(Integer)

@@ -150,6 +150,21 @@ v0.7.5는 설계뿐 아니라 코드, migration, 테스트까지 구현한다. �
 
 ## Sensitive storage hardening addendum
 
+## Scalar metadata additive foundation
+
+PR-1 adds reusable AES-256-GCM helpers for user email, document filename,
+extraction display filename, and clause title using canonical
+`scalar-metadata-v1` AAD. It also adds a separate HMAC-SHA-256 email lookup
+helper configured only by `EMAIL_LOOKUP_HMAC_KEY`; plain SHA-256 and
+deterministic encryption are not lookup mechanisms. Filename and title fields
+have no lookup hash.
+
+Only nullable additive columns and their Alembic revision are included.
+Application reads/writes, login lookup, API decryption, backfill, constraints,
+plaintext removal, and lookup-key rotation remain incomplete. The migration
+does not read runtime secrets, and merging this PR alone does not change
+existing application behavior or complete v0.7.5.
+
 - `Document.unclassified_sections` is stored as an encrypted-only strict JSON list. Each item uses `resource_type=document_unclassified_section`, the document ID, owner ID, `field_name=text`, item index, and `document-metadata-v1` in canonical AAD. Reordering or swapping items therefore fails closed.
 - Extracted fact `normalized_value`, `date_value`, `amount_value`, `duration_value`, and `obligation_party` are encrypted-only. Their AAD retains the analysis job, clause record, stable fact ID, owner, and field name; `null` remains `null`.
 - Provider execution exceptions retain payload byte length only, never raw request or response payload.
