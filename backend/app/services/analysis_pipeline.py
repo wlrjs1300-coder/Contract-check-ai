@@ -1,6 +1,5 @@
 import re
 import hashlib
-from copy import deepcopy
 from datetime import datetime
 
 
@@ -785,7 +784,6 @@ def run_analysis_pipeline(
                             owner_id=document_owner_id,
                             keyring=keyring,
                         ),
-                        "evidence": deepcopy(encrypted_evidence),
                         "evidence_snapshot_hash": snapshot_hash,
                         "snapshot_version": snapshot_version,
                     },

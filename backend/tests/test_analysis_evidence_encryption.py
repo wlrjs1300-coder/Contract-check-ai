@@ -93,7 +93,8 @@ def test_evidence_rejects_envelope_tamper(field: str) -> None:
     encrypted = _encrypt([_evidence()])
     envelope = encrypted[0]["source_text_encrypted"]
     assert isinstance(envelope, dict)
-    envelope[field] = "A" + str(envelope[field])[1:]
+    original = str(envelope[field])
+    envelope[field] = ("B" if original.startswith("A") else "A") + original[1:]
     with pytest.raises(ScalarDecryptionError):
         _decrypt(encrypted)
 

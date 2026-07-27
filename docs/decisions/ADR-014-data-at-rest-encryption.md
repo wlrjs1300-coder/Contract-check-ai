@@ -145,3 +145,15 @@ v0.7.5는 설계뿐 아니라 코드, migration, 테스트까지 구현한다. �
   ownership checks. Snapshot hash and stale contracts are unchanged.
 - Duplicate Evidence removal and the remaining filename/title, rotation, and
   backfill work are follow-up scope.
+
+## PR-6 Addendum: canonical Evidence location
+
+- The canonical persisted Evidence list is
+  `AnalysisResultItem.extra_data["analysis_value"]["evidence"]`.
+- New writes omit top-level `extra_data["evidence"]`; API fallback and duplicate
+  decryption are removed.
+- For transition compatibility, an existing top-level copy is accepted only
+  when it is raw-JSON-equal to the nested encrypted list. The nested list is
+  still the only response source. Mismatch or top-level-only data fails closed.
+- Snapshot hash/version metadata remains top-level and hash/stale behavior is
+  unchanged. Historical physical cleanup is a separately approved operation.
