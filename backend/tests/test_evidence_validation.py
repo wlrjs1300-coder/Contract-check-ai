@@ -1,3 +1,4 @@
+from backend.tests.support import encrypted_clause
 import pytest
 
 from backend.app.services.evidence_linking import (
@@ -120,7 +121,7 @@ def test_validate_evidence_rejects_missing_blocks() -> None:
         )
 
 
-def test_binds_and_validates_simple_clause() -> None:
+def test_binds_and_validates_simple_encrypted_clause() -> None:
     class Clause:
         reference_id = "doc:clause:1"
 
@@ -128,7 +129,7 @@ def test_binds_and_validates_simple_clause() -> None:
     evidence = bind_evidence_to_finding(
         document_id="doc",
         extraction_id="ext",
-        clause=Clause(),
+        clause=encrypted_clause(),
         source_text="이 계약의 목적은 테스트입니다.",
         snapshot=snapshot,
         snapshot_hash=calculate_snapshot_hash(snapshot),

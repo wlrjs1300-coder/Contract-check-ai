@@ -1,4 +1,5 @@
 from __future__ import annotations
+from backend.tests.support import encrypted_document, encrypted_extraction, encrypted_clause
 
 from contextlib import contextmanager
 from uuid import uuid4
@@ -17,6 +18,9 @@ from backend.app.services.nested_json_encryption import (
 from backend.app.services.scalar_encryption import encrypt_extraction_page_text
 from backend.app.services.scalar_encryption import decrypt_clause_body
 from backend.app.services.scalar_encryption import encrypt_clause_body
+from backend.app.services.scalar_metadata_encryption import (
+    decrypt_document_filename,
+)
 
 client = TestClient(app)
 
@@ -103,7 +107,7 @@ def _create_extraction_for_user(
         keyring=keyring,
     )
 
-    extraction = Extraction(
+    extraction = encrypted_extraction(
         id=extraction_id,
         filename_display="sample.pdf",
         source_type="pdf",
@@ -282,7 +286,7 @@ def test_extraction_cross_user_document_id_collision_isolation(db_session: Sessi
         extraction = db_session.get(Extraction, extraction_id)
         assert extraction is not None
 
-        conflicting_document = Document(
+        conflicting_document = encrypted_document(
             id=extraction_id,
             owner_id=user_b_id,
             filename="existing-b.txt",
@@ -294,7 +298,8 @@ def test_extraction_cross_user_document_id_collision_isolation(db_session: Sessi
             document_warnings=[],
         )
         conflict_clause_id = str(uuid4())
-        conflicting_clause = Clause(
+        conflicting_clause = encrypted_clause(
+            owner_id=user_b_id,
             id=conflict_clause_id,
             clause_id="clause-b-001",
             reference_id="conflict:clause:1",
@@ -341,7 +346,12 @@ def test_extraction_cross_user_document_id_collision_isolation(db_session: Sessi
         )
         assert len(documents) == 1
         assert documents[0].owner_id == user_b_id
-        assert documents[0].filename == "existing-b.txt"
+        assert decrypt_document_filename(
+            documents[0].filename_encrypted,
+            record_id=documents[0].id,
+            owner_id=user_b_id,
+            keyring=get_encryption_keyring(),
+        ) == "existing-b.txt"
         assert documents[0].owner_id != user_a_id
 
         clauses = (

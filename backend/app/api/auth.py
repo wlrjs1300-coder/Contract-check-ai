@@ -51,7 +51,6 @@ def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> Aut
     if (
         db.scalar(select(User).where(User.email_lookup_hash == lookup_hash))
         is not None
-        or db.scalar(select(User).where(User.email == email)) is not None
     ):
         raise HTTPException(
             status_code=409,
@@ -72,7 +71,6 @@ def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> Aut
         ) from exc
     user = User(
         id=user_id,
-        email=email,
         email_encrypted=email_encrypted,
         email_lookup_hash=lookup_hash,
         password_hash=password_hash,
@@ -91,7 +89,7 @@ def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> Aut
 
     return AuthRegisterResponse(
         user_id=user.id,
-        email=user.email,
+        email=email,
         is_active=user.is_active,
         created_at=user.created_at.replace(microsecond=0).isoformat() + "Z",
     )
@@ -135,7 +133,7 @@ def login(
 @router.get("/me", response_model=AuthMeResponse)
 def me(current_user: User = Depends(get_current_user)) -> AuthMeResponse:
     try:
-        email = resolve_user_email(current_user).value
+        email = resolve_user_email(current_user)
     except ScalarDecryptionError as exc:
         raise HTTPException(
             status_code=500,

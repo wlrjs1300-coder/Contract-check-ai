@@ -1,3 +1,4 @@
+from backend.tests.support import encrypted_document, encrypted_clause
 from uuid import uuid4
 
 import pytest
@@ -37,7 +38,7 @@ def _create_document_and_clause(
     clause_id = str(uuid4())
     body = "Synthetic clause body."
 
-    document = Document(
+    document = encrypted_document(
         id=document_id,
         owner_id=TEST_USER_ID,
         filename="pipeline.sample.txt",
@@ -49,7 +50,7 @@ def _create_document_and_clause(
         document_warnings=[],
     )
 
-    clause = Clause(
+    clause = encrypted_clause(
         id=clause_id,
         clause_id="clause-001",
         reference_id=(
@@ -206,7 +207,7 @@ def test_run_analysis_pipeline_rolls_back_partial_results(
     second_clause_id = str(uuid4())
     second_body = "Second synthetic clause body."
 
-    second_clause = Clause(
+    second_clause = encrypted_clause(
         id=second_clause_id,
         body_encrypted=encrypt_clause_body(
             second_body,
@@ -463,7 +464,7 @@ def test_run_analysis_pipeline_rolls_back_partial_results_on_mismatch(
     second_clause_id = str(uuid4())
     second_body = "Second synthetic clause body."
 
-    second_clause = Clause(
+    second_clause = encrypted_clause(
         id=second_clause_id,
         clause_id="clause-002",
         reference_id=f"{document.id}:clause:2",
@@ -749,7 +750,7 @@ def test_run_analysis_pipeline_rolls_back_partial_results_on_unsafe_output(
     second_clause_id = str(uuid4())
     second_body = "Second synthetic clause body."
 
-    second_clause = Clause(
+    second_clause = encrypted_clause(
         id=second_clause_id,
         clause_id="clause-002",
         reference_id=f"{document.id}:clause:2",
@@ -977,7 +978,7 @@ def test_run_analysis_pipeline_rolls_back_partial_results_after_retry_failure(
     second_clause_id = str(uuid4())
     second_body = "Second synthetic clause body."
 
-    second_clause = Clause(
+    second_clause = encrypted_clause(
         id=second_clause_id,
         clause_id="clause-002",
         reference_id=f"{document.id}:clause:2",

@@ -33,9 +33,6 @@ from backend.app.services.scalar_metadata_encryption import (
     encrypt_clause_title,
     encrypt_document_filename,
 )
-from backend.app.services.scalar_metadata_transition import (
-    resolve_transition_scalar,
-)
 from backend.app.services.scalar_encryption import (
     ScalarEncryptionError,
     ScalarDecryptionError,
@@ -64,19 +61,12 @@ def _serialize_clause(
             owner_id=owner_id,
             keyring=keyring,
         )
-        title = resolve_transition_scalar(
-            clause.title,
-            decrypt_clause_title(
-                clause.title_encrypted,
-                clause_id=clause.id,
-                owner_id=owner_id,
-                keyring=keyring,
-            )
-            if clause.title_encrypted is not None
-            else None,
-            encrypted_present=clause.title_encrypted is not None,
-            allow_missing=True,
-        ).value
+        title = decrypt_clause_title(
+            clause.title_encrypted,
+            clause_id=clause.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
     except ScalarDecryptionError as exc:
         raise HTTPException(
             status_code=500,
@@ -104,19 +94,12 @@ def _serialize_document(
     clauses = sorted(document.clauses, key=lambda clause: clause.ordinal)
     owner_id = document.owner_id
     try:
-        filename = resolve_transition_scalar(
-            document.filename,
-            decrypt_document_filename(
-                document.filename_encrypted,
-                record_id=document.id,
-                owner_id=owner_id,
-                keyring=keyring,
-            )
-            if document.filename_encrypted is not None
-            else None,
-            encrypted_present=document.filename_encrypted is not None,
-            allow_missing=False,
-        ).value
+        filename = decrypt_document_filename(
+            document.filename_encrypted,
+            record_id=document.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
         unclassified_sections = decrypt_unclassified_sections(
             document.unclassified_sections,
             document_id=document.id,
@@ -217,6 +200,8 @@ def _analysis_summary_from_items(
     items: list[AnalysisResultItem],
     current_snapshot_hash: str | None,
     values_by_item_id: dict[int, dict[str, object]],
+    owner_id: str,
+    keyring: EncryptionKeyring,
 ) -> dict[str, object]:
     severity_order = ["critical", "high", "medium", "low", "info"]
     action_priority_order = [
@@ -299,7 +284,18 @@ def _analysis_summary_from_items(
                 _analysis_value(item, values_by_item_id=values_by_item_id).get("finding_id") or item.id
             ),
             "severity": str(_analysis_value(item, values_by_item_id=values_by_item_id).get("severity", "info")),
-            "title": str(_analysis_value(item, values_by_item_id=values_by_item_id).get("title") or item.clause.title or item.id),
+            "title": str(
+                _analysis_value(
+                    item, values_by_item_id=values_by_item_id
+                ).get("title")
+                or decrypt_clause_title(
+                    item.clause.title_encrypted,
+                    clause_id=item.clause.id,
+                    owner_id=owner_id,
+                    keyring=keyring,
+                )
+                or item.id
+            ),
             "action_priority": str(_analysis_value(item, values_by_item_id=values_by_item_id).get("action_priority", "informational")),
         }
         for item in sorted_priorities[:3]
@@ -428,7 +424,13 @@ def _serialize_analysis_result_item(
         "summary": summary,
         "expert_review_recommended": item.expert_review_recommended,
         "severity": value.get("severity", "info"),
-        "title": value.get("title") or item.clause.title,
+        "title": value.get("title")
+        or decrypt_clause_title(
+            item.clause.title_encrypted,
+            clause_id=item.clause.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        ),
         "category": value.get("category"),
         "risk_type": value.get("risk_type"),
         "risk_reason": value.get("risk_reason"),
@@ -574,7 +576,6 @@ async def upload_document(
 
     document = Document(
         id=document_id,
-        filename=filename,
         filename_encrypted=filename_encrypted,
         owner_id=current_user.id,
         content_type=file.content_type,
@@ -616,7 +617,6 @@ async def upload_document(
                 ordinal=clause_data["ordinal"],
                 marker=clause_data["marker"],
                 clause_type=clause_data["clause_type"],
-                title=clause_data["title"],
                 title_encrypted=title_encrypted,
                 body_encrypted=body_encrypted,
                 warnings=clause_data["warnings"],
@@ -725,6 +725,8 @@ def get_analysis_results(
         items=items,
         current_snapshot_hash=current_snapshot_hash,
         values_by_item_id=values_by_item_id,
+        owner_id=current_user.id,
+        keyring=keyring,
     )
 
     return {
