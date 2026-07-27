@@ -153,18 +153,16 @@ def test_run_analysis_pipeline_evidence_source_text_is_not_empty(
 
     assert job.status == "completed"
     item = job.result_items[0]
-    evidence = item.extra_data.get("evidence")
-    assert evidence
-    assert "source_text" not in evidence[0]
-    assert "source_text_encrypted" in evidence[0]
+    assert "evidence" not in item.extra_data
     nested_evidence = item.extra_data["analysis_value"]["evidence"]
-    assert nested_evidence == evidence
-    assert nested_evidence is not evidence
+    assert nested_evidence
     assert "source_text" not in nested_evidence[0]
     assert "source_text_encrypted" in nested_evidence[0]
     assert "Synthetic clause body." not in str(item.extra_data)
+    assert "evidence_snapshot_hash" in item.extra_data
+    assert "snapshot_version" in item.extra_data
     decrypted = decrypt_analysis_evidence_list(
-        evidence,
+        nested_evidence,
         analysis_job_id=job.id,
         clause_record_id=clause.id,
         owner_id=TEST_USER_ID,
