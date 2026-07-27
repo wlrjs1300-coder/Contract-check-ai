@@ -1,4 +1,5 @@
 from __future__ import annotations
+from backend.tests.support import encrypted_document, encrypted_clause
 
 from uuid import uuid4
 
@@ -6,7 +7,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from backend.app.core.encryption_config import get_encryption_keyring
-from backend.app.db.models import AnalysisJob, Clause, Document
+from backend.app.db.models import AnalysisJob
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.scalar_encryption import (
     ScalarDecryptionError,
@@ -446,7 +447,7 @@ def test_raw_database_never_stores_plaintext_analysis_value_text(
     clause_id = str(uuid4())
     body = "월세는 매월 1일 지급하며 지연 시 지연이자가 발생한다."
 
-    document = Document(
+    document = encrypted_document(
         id=document_id,
         owner_id=TEST_USER_ID,
         filename="raw-db-check.txt",
@@ -457,7 +458,7 @@ def test_raw_database_never_stores_plaintext_analysis_value_text(
         unclassified_sections=[],
         document_warnings=[],
     )
-    clause = Clause(
+    clause = encrypted_clause(
         id=clause_id,
         clause_id="clause-001",
         reference_id=f"{document_id}:clause:1",

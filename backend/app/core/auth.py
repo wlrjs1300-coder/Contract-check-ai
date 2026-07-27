@@ -23,7 +23,6 @@ from backend.app.core.email_lookup import (
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.services.scalar_encryption import ScalarDecryptionError
 from backend.app.services.scalar_metadata_encryption import decrypt_user_email
-from backend.app.services.scalar_metadata_transition import resolve_transition_scalar
 
 
 _PASSWORD_HASHER = PasswordHash.recommended()
@@ -217,20 +216,12 @@ def authenticate_user(db: Session, *, email: str, password: str) -> User | None:
         select(User).where(User.email_lookup_hash == lookup_hash)
     )
     if user is None:
-        legacy_candidate = db.scalar(select(User).where(User.email == email))
-        if (
-            legacy_candidate is not None
-            and legacy_candidate.email_lookup_hash is not None
-        ):
-            raise ScalarDecryptionError("Stored encrypted data is unavailable.")
-        user = legacy_candidate
-    if user is None:
         _ = verify_password(password, _DUMMY_PASSWORD_HASH)
         return None
 
     resolved = resolve_user_email(user)
     if not compare_email_lookup_hash(
-        build_email_lookup_hash(resolved.value or ""),
+        build_email_lookup_hash(resolved),
         lookup_hash,
     ):
         raise ScalarDecryptionError("Stored encrypted data is unavailable.")
@@ -240,26 +231,12 @@ def authenticate_user(db: Session, *, email: str, password: str) -> User | None:
 
 
 def resolve_user_email(user: User):
-    encrypted_present = user.email_encrypted is not None
-    decrypted = (
-        decrypt_user_email(
-            user.email_encrypted,
-            user_id=user.id,
-            keyring=get_encryption_keyring(),
-        )
-        if encrypted_present
-        else None
+    decrypted = decrypt_user_email(
+        user.email_encrypted,
+        user_id=user.id,
+        keyring=get_encryption_keyring(),
     )
-    resolved = resolve_transition_scalar(
-        user.email,
-        decrypted,
-        encrypted_present=encrypted_present,
-        allow_missing=False,
-    )
-    if user.email_lookup_hash is not None:
-        expected = build_email_lookup_hash(resolved.value or "")
-        if not compare_email_lookup_hash(user.email_lookup_hash, expected):
-            raise ScalarDecryptionError("Stored encrypted data is unavailable.")
-    elif encrypted_present:
+    expected = build_email_lookup_hash(decrypted)
+    if not compare_email_lookup_hash(user.email_lookup_hash, expected):
         raise ScalarDecryptionError("Stored encrypted data is unavailable.")
-    return resolved
+    return decrypted

@@ -89,9 +89,6 @@ from backend.app.services.scalar_metadata_encryption import (
     decrypt_extraction_filename_display,
     encrypt_extraction_filename_display,
 )
-from backend.app.services.scalar_metadata_transition import (
-    resolve_transition_scalar,
-)
 from backend.app.services.nested_json_encryption import (
     decrypt_confirmation_snapshot,
     decrypt_extraction_page_blocks,
@@ -570,19 +567,12 @@ def _serialize_extraction(
         )
 
     try:
-        filename_display = resolve_transition_scalar(
-            extraction.filename_display,
-            decrypt_extraction_filename_display(
-                extraction.filename_display_encrypted,
-                record_id=extraction.id,
-                owner_id=owner_id,
-                keyring=keyring,
-            )
-            if extraction.filename_display_encrypted is not None
-            else None,
-            encrypted_present=extraction.filename_display_encrypted is not None,
-            allow_missing=False,
-        ).value
+        filename_display = decrypt_extraction_filename_display(
+            extraction.filename_display_encrypted,
+            record_id=extraction.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
     except ScalarDecryptionError as exc:
         raise HTTPException(
             status_code=500,
@@ -1089,7 +1079,6 @@ async def create_extraction(
     extraction = Extraction(
         id=extraction_id,
         owner_id=current_user.id,
-        filename_display=filename_display,
         filename_display_encrypted=encrypt_extraction_filename_display(
             filename_display,
             record_id=extraction_id,
@@ -1326,7 +1315,6 @@ async def create_image_extraction(
     extraction = Extraction(
         id=extraction_id,
         owner_id=current_user.id,
-        filename_display=filename_display,
         filename_display_encrypted=encrypt_extraction_filename_display(
             filename_display,
             record_id=extraction_id,

@@ -26,7 +26,6 @@ from backend.app.services.scalar_metadata_encryption import (
     encrypt_clause_title,
     encrypt_document_filename,
 )
-from backend.app.services.scalar_metadata_transition import resolve_transition_scalar
 
 
 router = APIRouter(tags=["analysis-jobs"])
@@ -233,19 +232,12 @@ def _load_or_create_analysis_document(
 
     if document is None:
         try:
-            filename = resolve_transition_scalar(
-                extraction.filename_display,
-                decrypt_extraction_filename_display(
-                    extraction.filename_display_encrypted,
-                    record_id=extraction.id,
-                    owner_id=current_user_id,
-                    keyring=encryption_keyring,
-                )
-                if extraction.filename_display_encrypted is not None
-                else None,
-                encrypted_present=extraction.filename_display_encrypted is not None,
-                allow_missing=False,
-            ).value
+            filename = decrypt_extraction_filename_display(
+                extraction.filename_display_encrypted,
+                record_id=extraction.id,
+                owner_id=current_user_id,
+                keyring=encryption_keyring,
+            )
             if not isinstance(filename, str):
                 raise ScalarEncryptionError("Invalid filename.")
             filename_encrypted = encrypt_document_filename(
@@ -268,7 +260,6 @@ def _load_or_create_analysis_document(
         document = Document(
             id=extraction.id,
             owner_id=current_user_id,
-            filename=filename,
             filename_encrypted=filename_encrypted,
             content_type=extraction.source_type,
             size_bytes=extraction.size_bytes,
@@ -312,7 +303,6 @@ def _load_or_create_analysis_document(
                 ordinal=clause_data["ordinal"],
                 marker=clause_data["marker"],
                 clause_type=clause_data["clause_type"],
-                title=clause_data.get("title"),
                 title_encrypted=title_encrypted,
                 body_encrypted=encrypted_body,
                 warnings=list(clause_data.get("warnings") or []),

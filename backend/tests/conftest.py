@@ -1,4 +1,5 @@
 from __future__ import annotations
+from backend.tests.support import encrypted_user
 
 import os
 import json
@@ -74,7 +75,7 @@ def override_get_db():
 def _ensure_test_user(db: Session) -> User:
     user = db.scalar(select(User).where(User.id == TEST_USER_ID))
     if user is None:
-        user = User(
+        user = encrypted_user(
             id=TEST_USER_ID,
             email=TEST_USER_EMAIL,
             password_hash=hash_password(TEST_USER_PASSWORD),

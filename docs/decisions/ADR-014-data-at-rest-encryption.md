@@ -154,6 +154,19 @@ v0.7.5는 설계뿐 아니라 코드, migration, 테스트까지 구현한다. �
 
 ## Scalar metadata transition
 
+## Scalar metadata encrypted-only cutover
+
+Revision `0005_scalar_metadata_cutover` completes the code and synthetic-DB
+cutover. User email, document filename, extraction display filename, and
+clause title no longer have plaintext columns. Required encrypted metadata is
+NOT NULL, email lookup uses a unique keyed HMAC index, and application reads
+have no plaintext fallback. Ownership is resolved before decryption.
+
+Transition dual-write and backfill code are removed. Downgrade with populated
+encrypted rows is blocked; forward-fix is the recovery strategy. This marks
+v0.7.5 implementation complete for code and synthetic databases, not approval
+for production secrets, data migration, or deployment.
+
 The application now temporarily dual-writes plaintext and encrypted scalar
 metadata. Reads prefer authenticated ciphertext, require dual values to match,
 and allow explicitly identifiable plaintext-only legacy rows during the

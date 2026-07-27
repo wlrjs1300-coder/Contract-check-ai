@@ -1,8 +1,9 @@
+from backend.tests.support import encrypted_document, encrypted_clause
 from uuid import uuid4
 
 import pytest
 
-from backend.app.db.models import AnalysisJob, Clause, Document
+from backend.app.db.models import AnalysisJob
 from backend.app.services.analysis_provider import AnalysisProviderInput
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.analysis_result_encryption import decrypt_analysis_value
@@ -19,7 +20,7 @@ def _create_document_and_clause(db_session, body: str):
     document_id = str(uuid4())
     clause_id = str(uuid4())
     keyring = get_encryption_keyring()
-    document = Document(
+    document = encrypted_document(
         id=document_id,
         owner_id=TEST_USER_ID,
         filename="facts.txt",
@@ -30,7 +31,7 @@ def _create_document_and_clause(db_session, body: str):
         unclassified_sections=[],
         document_warnings=[],
     )
-    clause = Clause(
+    clause = encrypted_clause(
         id=clause_id,
         clause_id="clause-001",
         reference_id=f"{document_id}:clause:1",

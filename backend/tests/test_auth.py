@@ -1,4 +1,6 @@
 from __future__ import annotations
+from backend.tests.support import encrypted_user
+from backend.app.core.email_lookup import build_email_lookup_hash
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -184,7 +186,12 @@ def test_register_email_normalization_and_password_boundaries(db_session) -> Non
         assert spaced.json().get("password") is None
         assert spaced.json().get("password_hash") is None
 
-    user = db_session.scalar(select(User).where(User.email == "space@example.invalid"))
+    user = db_session.scalar(
+        select(User).where(
+            User.email_lookup_hash
+            == build_email_lookup_hash("space@example.invalid")
+        )
+    )
     assert user is not None
     assert user.password_hash != "  Password12345!  "
     assert user.password_hash.startswith("$argon2")
@@ -208,9 +215,14 @@ def test_login_failures_return_401(db_session) -> None:
         wrong_pw = _login_user(client, "active-user@example.invalid", "WrongPassword111")
         _assert_invalid_credentials(wrong_pw)
 
-    inactive = db_session.scalar(select(User).where(User.email == "inactive-user@example.invalid"))
+    inactive = db_session.scalar(
+        select(User).where(
+            User.email_lookup_hash
+            == build_email_lookup_hash("inactive-user@example.invalid")
+        )
+    )
     if inactive is None:
-        inactive = User(
+        inactive = encrypted_user(
             id=str(uuid4()),
             email="inactive-user@example.invalid",
             password_hash=hash_password("Password12345!"),
@@ -260,9 +272,14 @@ def test_auth_me_nonexistent_inactive_and_version_failures(db_session) -> None:
     _assert_unauthorized(_auth_me_with_token(_jwt_claims({"sub": "00000000-0000-4000-8000-00000000aaaa"})))
     _assert_unauthorized(_auth_me_with_token(_jwt_claims({"ver": 9999})))
 
-    inactive = db_session.scalar(select(User).where(User.email == "inactive-me@example.invalid"))
+    inactive = db_session.scalar(
+        select(User).where(
+            User.email_lookup_hash
+            == build_email_lookup_hash("inactive-me@example.invalid")
+        )
+    )
     if inactive is None:
-        inactive = User(
+        inactive = encrypted_user(
             id="00000000-0000-4000-8000-000000000099",
             email="inactive-me@example.invalid",
             password_hash=hash_password("Password12345!"),

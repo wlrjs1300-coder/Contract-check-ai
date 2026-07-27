@@ -856,7 +856,7 @@ def test_shared_test_engine_rejects_orphan_owner(sqlite_test_engine) -> None:
                     """
                     INSERT INTO extractions (
                         id,
-                        filename_display,
+                            filename_display_encrypted,
                         source_type,
                         size_bytes,
                         page_count,
@@ -869,7 +869,7 @@ def test_shared_test_engine_rejects_orphan_owner(sqlite_test_engine) -> None:
                         owner_id
                     ) VALUES (
                         :id,
-                        :filename_display,
+                            :filename_display_encrypted,
                         :source_type,
                         :size_bytes,
                         :page_count,
@@ -885,7 +885,7 @@ def test_shared_test_engine_rejects_orphan_owner(sqlite_test_engine) -> None:
                 ),
                 {
                     "id": "00000000-0000-4000-8000-0000000000fe",
-                    "filename_display": "orphan.txt",
+                        "filename_display_encrypted": "synthetic-envelope",
                     "source_type": "text",
                     "size_bytes": 1,
                     "page_count": 1,
@@ -1211,7 +1211,9 @@ def test_migration_head_matches_orm_metadata(tmp_path: Path, monkeypatch) -> Non
                 assert user_cols[col]["default"] is None
 
             user_indexes = {i["name"]: i for i in insp.get_indexes("users")}
-            assert bool(user_indexes["ix_users_email"]["unique"]) is True
+            assert bool(
+                user_indexes["ix_users_email_lookup_hash"]["unique"]
+            ) is True
 
             for table_name in ("documents", "extractions"):
                 cols = {c["name"] for c in insp.get_columns(table_name)}

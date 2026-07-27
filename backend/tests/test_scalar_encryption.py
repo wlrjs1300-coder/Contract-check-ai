@@ -1,4 +1,5 @@
 from __future__ import annotations
+from backend.tests.support import encrypted_document, encrypted_extraction, encrypted_clause
 
 import base64
 import json
@@ -14,9 +15,6 @@ from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.db.models import (
     AnalysisJob,
     AnalysisResultItem,
-    Clause,
-    Document,
-    Extraction,
     ExtractionPage,
 )
 from backend.app.main import app
@@ -612,7 +610,7 @@ def test_raw_database_never_stores_plaintext_scalars(
 
     document_id = str(uuid4())
     clause_id = str(uuid4())
-    document = Document(
+    document = encrypted_document(
         id=document_id,
         owner_id=TEST_USER_ID,
         filename="raw-storage.sample.txt",
@@ -623,7 +621,7 @@ def test_raw_database_never_stores_plaintext_scalars(
         unclassified_sections=[],
         document_warnings=[],
     )
-    clause = Clause(
+    clause = encrypted_clause(
         id=clause_id,
         clause_id="clause-001",
         reference_id=f"{document_id}:clause:1",
@@ -644,7 +642,7 @@ def test_raw_database_never_stores_plaintext_scalars(
     db_session.add(document)
 
     extraction_id = str(uuid4())
-    extraction = Extraction(
+    extraction = encrypted_extraction(
         id=extraction_id,
         owner_id=TEST_USER_ID,
         filename_display="raw-storage.pdf",
@@ -765,7 +763,7 @@ def test_raw_database_never_stores_plaintext_scalars(
 def test_clause_row_copy_cross_row_decryption_fails(db_session: Session) -> None:
     keyring = _keyring()
     document_id = str(uuid4())
-    document = Document(
+    document = encrypted_document(
         id=document_id,
         owner_id=TEST_USER_ID,
         filename="row-copy.sample.txt",
@@ -778,7 +776,7 @@ def test_clause_row_copy_cross_row_decryption_fails(db_session: Session) -> None
     )
     clause_a_id = str(uuid4())
     clause_b_id = str(uuid4())
-    clause_a = Clause(
+    clause_a = encrypted_clause(
         id=clause_a_id,
         clause_id="clause-a",
         reference_id=f"{document_id}:clause:1",
@@ -795,7 +793,7 @@ def test_clause_row_copy_cross_row_decryption_fails(db_session: Session) -> None
         ),
         warnings=[],
     )
-    clause_b = Clause(
+    clause_b = encrypted_clause(
         id=clause_b_id,
         clause_id="clause-b",
         reference_id=f"{document_id}:clause:2",
@@ -835,7 +833,7 @@ def test_clause_row_copy_cross_row_decryption_fails(db_session: Session) -> None
 def test_extraction_page_row_copy_cross_row_decryption_fails(db_session: Session) -> None:
     keyring = _keyring()
     extraction_id = str(uuid4())
-    extraction = Extraction(
+    extraction = encrypted_extraction(
         id=extraction_id,
         owner_id=TEST_USER_ID,
         filename_display="row-copy.pdf",
@@ -902,7 +900,7 @@ def test_extraction_page_row_copy_cross_row_decryption_fails(db_session: Session
 def test_analysis_result_item_row_copy_cross_row_decryption_fails(db_session: Session) -> None:
     keyring = _keyring()
     document_id = str(uuid4())
-    document = Document(
+    document = encrypted_document(
         id=document_id,
         owner_id=TEST_USER_ID,
         filename="row-copy-item.sample.txt",
@@ -914,7 +912,7 @@ def test_analysis_result_item_row_copy_cross_row_decryption_fails(db_session: Se
         document_warnings=[],
     )
     clause_id = str(uuid4())
-    clause = Clause(
+    clause = encrypted_clause(
         id=clause_id,
         clause_id="clause-001",
         reference_id=f"{document_id}:clause:1",
