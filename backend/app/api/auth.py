@@ -13,9 +13,17 @@ from backend.app.core.auth import (
     issue_jwt_for_user,
     normalize_and_validate_email,
     get_current_user,
+    resolve_user_email,
 )
+from backend.app.core.email_lookup import build_email_lookup_hash
+from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.db.database import get_db
 from backend.app.db.models import User
+from backend.app.services.scalar_encryption import (
+    ScalarDecryptionError,
+    ScalarEncryptionError,
+)
+from backend.app.services.scalar_metadata_encryption import encrypt_user_email
 from backend.app.schemas.auth import (
     AuthLoginRequest,
     AuthLoginResponse,
@@ -39,15 +47,34 @@ def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> Aut
             detail="Invalid password.",
         )
 
-    if db.scalar(select(User).where(User.email == email)) is not None:
+    lookup_hash = build_email_lookup_hash(email)
+    if (
+        db.scalar(select(User).where(User.email_lookup_hash == lookup_hash))
+        is not None
+        or db.scalar(select(User).where(User.email == email)) is not None
+    ):
         raise HTTPException(
             status_code=409,
             detail="A user with that email already exists.",
         )
 
+    user_id = str(uuid4())
+    try:
+        email_encrypted = encrypt_user_email(
+            email,
+            user_id=user_id,
+            keyring=get_encryption_keyring(),
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to prepare account data.",
+        ) from exc
     user = User(
-        id=str(uuid4()),
+        id=user_id,
         email=email,
+        email_encrypted=email_encrypted,
+        email_lookup_hash=lookup_hash,
         password_hash=password_hash,
         is_active=True,
     )
@@ -76,11 +103,17 @@ def login(
     db: Session = Depends(get_db),
 ) -> AuthLoginResponse:
     email = normalize_and_validate_email(payload.email)
-    user = authenticate_user(
-        db,
-        email=email,
-        password=payload.password,
-    )
+    try:
+        user = authenticate_user(
+            db,
+            email=email,
+            password=payload.password,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
     if user is None:
         raise HTTPException(
             status_code=401,
@@ -101,9 +134,21 @@ def login(
 
 @router.get("/me", response_model=AuthMeResponse)
 def me(current_user: User = Depends(get_current_user)) -> AuthMeResponse:
+    try:
+        email = resolve_user_email(current_user).value
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
+    if not isinstance(email, str):
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        )
     return AuthMeResponse(
         user_id=current_user.id,
-        email=current_user.email,
+        email=email,
         is_active=current_user.is_active,
         created_at=current_user.created_at.replace(microsecond=0).isoformat() + "Z",
     )

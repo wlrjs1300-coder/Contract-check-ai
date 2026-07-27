@@ -85,6 +85,13 @@ from backend.app.services.scalar_encryption import (
     decrypt_extraction_page_text,
     encrypt_extraction_page_text,
 )
+from backend.app.services.scalar_metadata_encryption import (
+    decrypt_extraction_filename_display,
+    encrypt_extraction_filename_display,
+)
+from backend.app.services.scalar_metadata_transition import (
+    resolve_transition_scalar,
+)
 from backend.app.services.nested_json_encryption import (
     decrypt_confirmation_snapshot,
     decrypt_extraction_page_blocks,
@@ -562,9 +569,34 @@ def _serialize_extraction(
             )
         )
 
+    try:
+        filename_display = resolve_transition_scalar(
+            extraction.filename_display,
+            decrypt_extraction_filename_display(
+                extraction.filename_display_encrypted,
+                record_id=extraction.id,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+            if extraction.filename_display_encrypted is not None
+            else None,
+            encrypted_present=extraction.filename_display_encrypted is not None,
+            allow_missing=False,
+        ).value
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encrypted_data_unavailable",
+                "Stored encrypted data is unavailable.",
+            ),
+        ) from exc
+    if not isinstance(filename_display, str):
+        raise HTTPException(status_code=500, detail="Stored encrypted data is unavailable.")
+
     return ExtractionResponse(
         extraction_id=extraction.id,
-        filename_display=extraction.filename_display,
+        filename_display=filename_display,
         source_type=extraction.source_type,
         size_bytes=extraction.size_bytes,
         page_count=extraction.page_count,
@@ -1052,10 +1084,18 @@ async def create_extraction(
         extraction_method = "ocr" if extraction_summary.get("direct_pages") == 0 else "mixed"
     requires_user_review = extraction_summary.get("review_required_pages", 0) > 0
 
+    extraction_id = str(uuid4())
+    filename_display = _safe_filename_display(filename)
     extraction = Extraction(
-        id=str(uuid4()),
+        id=extraction_id,
         owner_id=current_user.id,
-        filename_display=_safe_filename_display(filename),
+        filename_display=filename_display,
+        filename_display_encrypted=encrypt_extraction_filename_display(
+            filename_display,
+            record_id=extraction_id,
+            owner_id=current_user.id,
+            keyring=get_encryption_keyring(),
+        ),
         source_type="pdf",
         size_bytes=size_bytes,
         page_count=len(processed_pages),
@@ -1281,10 +1321,18 @@ async def create_image_extraction(
             ),
         )
 
+    extraction_id = str(uuid4())
+    filename_display = "image-upload"
     extraction = Extraction(
-        id=str(uuid4()),
+        id=extraction_id,
         owner_id=current_user.id,
-        filename_display="image-upload",
+        filename_display=filename_display,
+        filename_display_encrypted=encrypt_extraction_filename_display(
+            filename_display,
+            record_id=extraction_id,
+            owner_id=current_user.id,
+            keyring=get_encryption_keyring(),
+        ),
         source_type="image",
         size_bytes=total_size_bytes,
         page_count=len(extracted_images.pages),

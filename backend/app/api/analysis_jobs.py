@@ -21,6 +21,12 @@ from backend.app.services.scalar_encryption import (
 from backend.app.services.document_metadata_encryption import (
     encrypt_unclassified_sections,
 )
+from backend.app.services.scalar_metadata_encryption import (
+    decrypt_extraction_filename_display,
+    encrypt_clause_title,
+    encrypt_document_filename,
+)
+from backend.app.services.scalar_metadata_transition import resolve_transition_scalar
 
 
 router = APIRouter(tags=["analysis-jobs"])
@@ -227,6 +233,27 @@ def _load_or_create_analysis_document(
 
     if document is None:
         try:
+            filename = resolve_transition_scalar(
+                extraction.filename_display,
+                decrypt_extraction_filename_display(
+                    extraction.filename_display_encrypted,
+                    record_id=extraction.id,
+                    owner_id=current_user_id,
+                    keyring=encryption_keyring,
+                )
+                if extraction.filename_display_encrypted is not None
+                else None,
+                encrypted_present=extraction.filename_display_encrypted is not None,
+                allow_missing=False,
+            ).value
+            if not isinstance(filename, str):
+                raise ScalarEncryptionError("Invalid filename.")
+            filename_encrypted = encrypt_document_filename(
+                filename,
+                record_id=extraction.id,
+                owner_id=current_user_id,
+                keyring=encryption_keyring,
+            )
             unclassified_sections = encrypt_unclassified_sections(
                 split_result["unclassified_sections"],
                 document_id=extraction.id,
@@ -241,7 +268,8 @@ def _load_or_create_analysis_document(
         document = Document(
             id=extraction.id,
             owner_id=current_user_id,
-            filename=extraction.filename_display,
+            filename=filename,
+            filename_encrypted=filename_encrypted,
             content_type=extraction.source_type,
             size_bytes=extraction.size_bytes,
             character_count=int(extraction_data.get("final_total_text_length", 0)),
@@ -269,6 +297,13 @@ def _load_or_create_analysis_document(
                 owner_id=current_user_id,
                 keyring=encryption_keyring,
             )
+            title = clause_data.get("title")
+            title_encrypted = encrypt_clause_title(
+                title,
+                clause_id=clause_id,
+                owner_id=current_user_id,
+                keyring=encryption_keyring,
+            )
             clause = Clause(
                 id=clause_id,
                 clause_id=clause_data["clause_id"],
@@ -278,6 +313,7 @@ def _load_or_create_analysis_document(
                 marker=clause_data["marker"],
                 clause_type=clause_data["clause_type"],
                 title=clause_data.get("title"),
+                title_encrypted=title_encrypted,
                 body_encrypted=encrypted_body,
                 warnings=list(clause_data.get("warnings") or []),
             )

@@ -26,6 +26,8 @@ from backend.app.services.scalar_encryption import (
     encrypt_analysis_result_summary,
     decrypt_clause_body,
 )
+from backend.app.services.scalar_metadata_encryption import decrypt_clause_title
+from backend.app.services.scalar_metadata_transition import resolve_transition_scalar
 from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
 from backend.app.services.analysis_result_encryption import encrypt_analysis_value
 from backend.app.services.analysis_evidence_encryption import (
@@ -602,6 +604,7 @@ def build_provider_request(
     snapshot_version: int,
     clause: Clause,
     masked_text: str,
+    clause_title: str | None = None,
 ) -> AnalysisProviderRequest:
     block_ids = [
         str(block_id)
@@ -621,7 +624,7 @@ def build_provider_request(
 
     clause_input = AnalysisClauseInput(
         clause_id=clause.clause_id,
-        clause_label=clause.title or clause.clause_id,
+        clause_label=clause_title or clause.title or clause.clause_id,
         clause_level=str(getattr(clause, "clause_level", "normal") or "normal"),
         text=masked_text[:4000],
         page_start=getattr(clause, "page_start", None),
@@ -694,12 +697,26 @@ def run_analysis_pipeline(
                 clause,
                 clause_body=clause_body,
             )
+            clause_title = resolve_transition_scalar(
+                clause.title,
+                decrypt_clause_title(
+                    clause.title_encrypted,
+                    clause_id=clause.id,
+                    owner_id=document_owner_id,
+                    keyring=keyring,
+                )
+                if clause.title_encrypted is not None
+                else None,
+                encrypted_present=clause.title_encrypted is not None,
+                allow_missing=True,
+            ).value
             request = build_provider_request(
                 request_id=f"{job.id}:{request_index}",
                 document_id=job.document_id,
                 snapshot_version=(snapshot_version or 1),
                 clause=clause,
                 masked_text=provider_input.masked_text,
+                clause_title=clause_title,
             )
             request_index += 1
 
