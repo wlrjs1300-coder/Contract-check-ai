@@ -219,8 +219,8 @@ def test_rejects_non_pdf_extension() -> None:
         filename="synthetic.txt",
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "unsupported_file_type"
+    assert response.status_code == 415
+    assert response.json()["detail"]["code"] == "UNSUPPORTED_FILE_TYPE"
 
 
 def test_rejects_conflicting_mime_type() -> None:
@@ -229,8 +229,8 @@ def test_rejects_conflicting_mime_type() -> None:
         content_type="text/plain",
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "file_type_mismatch"
+    assert response.status_code == 415
+    assert response.json()["detail"]["code"] == "UNSUPPORTED_FILE_TYPE"
 
 
 def test_rejects_invalid_pdf_signature() -> None:
@@ -273,7 +273,28 @@ def test_rejects_pdf_over_size_limit(
 
     assert pdf_extraction.MAX_PDF_SIZE_BYTES == 20 * 1024 * 1024
     assert response.status_code == 413
-    assert response.json()["detail"]["code"] == "file_size_limit_exceeded"
+    assert response.json()["detail"]["code"] == "UPLOAD_TOO_LARGE"
+
+
+def test_rejects_configured_extracted_character_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_EXTRACTED_CHARACTERS", "5")
+    response = _post_pdf(
+        _synthetic_text_pdf(["This extracted text exceeds five characters."])
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "EXTRACTION_LIMIT_EXCEEDED"
+    assert "This extracted text" not in response.text
+
+
+def test_rejects_configured_page_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_DOCUMENT_PAGES", "1")
+    response = _post_pdf(_synthetic_text_pdf(["First page text.", "Second page text."]))
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "EXTRACTION_LIMIT_EXCEEDED"
 
 
 def test_rejects_pdf_over_page_limit() -> None:

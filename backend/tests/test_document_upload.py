@@ -79,9 +79,12 @@ def test_reject_non_txt_document() -> None:
         },
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 415
     assert response.json() == {
-        "detail": "Only .txt files are allowed."
+        "detail": {
+            "code": "UNSUPPORTED_FILE_TYPE",
+            "message": "Only UTF-8 text files are supported.",
+        }
     }
 
 
@@ -99,5 +102,47 @@ def test_reject_empty_txt_document() -> None:
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "The uploaded file is empty."
+        "detail": {
+            "code": "EMPTY_FILE",
+            "message": "The uploaded file is empty.",
+        }
     }
+
+
+def test_reject_mime_mismatch_and_double_extension() -> None:
+    mime_response = client.post(
+        "/documents/upload",
+        files={"file": ("contract.txt", b"safe text", "application/pdf")},
+    )
+    double_response = client.post(
+        "/documents/upload",
+        files={"file": ("contract.exe.txt", b"safe text", "text/plain")},
+    )
+    assert mime_response.status_code == 415
+    assert double_response.status_code == 415
+
+
+def test_reject_zero_byte_nul_and_unsafe_filenames() -> None:
+    nul_response = client.post(
+        "/documents/upload",
+        files={"file": ("contract.txt", b"safe\x00text", "text/plain")},
+    )
+    assert nul_response.status_code == 400
+    for filename in ("../contract.txt", "..\\contract.txt", "bad\nname.txt"):
+        response = client.post(
+            "/documents/upload",
+            files={"file": (filename, b"safe text", "text/plain")},
+        )
+        assert response.status_code == 400
+        assert filename not in response.text
+
+
+def test_upload_limit_is_enforced_during_chunk_read(monkeypatch) -> None:
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "8")
+    response = client.post(
+        "/documents/upload",
+        files={"file": ("contract.txt", b"123456789", "text/plain")},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "UPLOAD_TOO_LARGE"
+    assert "contract.txt" not in response.text
