@@ -1,23 +1,32 @@
+from __future__ import annotations
+
 import os
+import logging
+import re
+import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.app.api.analysis_jobs import router as analysis_jobs_router
 from backend.app.api.documents import router as documents_router
 from backend.app.api.extractions import router as extractions_router
 from backend.app.api.auth import router as auth_router
-from backend.app.db import models as _models  # noqa: F401
 from backend.app.core.config import get_jwt_config
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.core.email_lookup import get_email_lookup_key
-from backend.app.services.extraction_orphan_cleanup import OrphanCleanupError
-from backend.app.services.extraction_orphan_cleanup import sweep_orphan_request_directories
+from backend.app.core.logging import configure_logging, log_event
+from backend.app.core.operations_config import validate_runtime_configuration
+from backend.app.services.extraction_orphan_cleanup import OrphanCleanupError, sweep_orphan_request_directories
+from backend.app.services.readiness import ReadinessError, get_readiness_status
 
 
 DEFAULT_CORS_ALLOWED_ORIGINS = "http://localhost:5173"
+_REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def parse_cors_allowed_origins(value: str | None = None) -> list[str]:
@@ -55,8 +64,22 @@ def parse_cors_allowed_origins(value: str | None = None) -> list[str]:
     return list(dict.fromkeys(origins))
 
 
+def _coerce_request_id(raw_request_id: str | None) -> str:
+    if raw_request_id and _REQUEST_ID_PATTERN.fullmatch(raw_request_id):
+        return raw_request_id
+    return f"{time.time_ns()}"
+
+
+def _coerce_job_id(raw_job_id: str | None) -> str | None:
+    if raw_job_id and _REQUEST_ID_PATTERN.fullmatch(raw_job_id):
+        return raw_job_id
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
+    configure_logging("api")
+    validate_runtime_configuration()
     get_jwt_config()
     get_encryption_keyring()
     get_email_lookup_key()
@@ -78,16 +101,55 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
 
 app = FastAPI(
     title="ContractCheck AI API",
-    version="0.7.4",
+    version="0.8.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = _coerce_request_id(request.headers.get(_REQUEST_ID_HEADER))
+    job_id = _coerce_job_id(request.headers.get("X-Job-ID"))
+    start = time.perf_counter()
+
+    logger = logging.getLogger("api")
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        log_event(
+            logger=logger,
+            event="http_request_completed",
+            service="api",
+            status="error",
+            request_id=request_id,
+            job_id=job_id,
+            duration_ms=duration_ms,
+            safe_error_code=type(exc).__name__,
+        )
+        raise
+
+    response.headers[_REQUEST_ID_HEADER] = request_id
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    log_event(
+        logger=logger,
+        event="http_request_completed",
+        service="api",
+        status=str(response.status_code),
+        request_id=request_id,
+        job_id=job_id,
+        duration_ms=duration_ms,
+    )
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=parse_cors_allowed_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Accept", "Content-Type", "Authorization", "If-Match"],
+    allow_headers=["Accept", "Content-Type", "Authorization", "If-Match", "X-Request-ID", "X-Job-ID"],
 )
 
 app.include_router(auth_router)
@@ -99,3 +161,15 @@ app.include_router(extractions_router)
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness_check() -> dict[str, str]:
+    try:
+        status = get_readiness_status()
+    except ReadinessError:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready"},
+        )
+    return status

@@ -1,0 +1,109 @@
+﻿services:
+  contract-db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?required}
+      MYSQL_USER: ${MYSQL_USER:?required}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?required}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mysqladmin ping -h 127.0.0.1 -u "$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+    environment:
+      APP_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?required}
+      DATA_ENCRYPTION_KEYS_JSON: ${DATA_ENCRYPTION_KEYS_JSON:?required}
+      DATA_ENCRYPTION_ACTIVE_KEY_ID: ${DATA_ENCRYPTION_ACTIVE_KEY_ID:?required}
+      JWT_SECRET: ${JWT_SECRET:?required}
+      EMAIL_LOOKUP_HMAC_KEY: ${EMAIL_LOOKUP_HMAC_KEY:?required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?required}
+      ANALYSIS_PROVIDER: ${ANALYSIS_PROVIDER:?required}
+    depends_on:
+      contract-db:
+        condition: service_healthy
+    working_dir: /app
+    command: ["bash", "-lc", "cd backend && alembic upgrade head"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?required}
+      DATA_ENCRYPTION_KEYS_JSON: ${DATA_ENCRYPTION_KEYS_JSON:?required}
+      DATA_ENCRYPTION_ACTIVE_KEY_ID: ${DATA_ENCRYPTION_ACTIVE_KEY_ID:?required}
+      JWT_SECRET: ${JWT_SECRET:?required}
+      EMAIL_LOOKUP_HMAC_KEY: ${EMAIL_LOOKUP_HMAC_KEY:?required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?required}
+      ANALYSIS_PROVIDER: ${ANALYSIS_PROVIDER:?required}
+    ports:
+      - "8000:8000"
+    command:
+      - python
+      - -m
+      - uvicorn
+      - backend.app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --timeout-graceful-shutdown
+      - "30"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    environment:
+      APP_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?required}
+      DATA_ENCRYPTION_KEYS_JSON: ${DATA_ENCRYPTION_KEYS_JSON:?required}
+      DATA_ENCRYPTION_ACTIVE_KEY_ID: ${DATA_ENCRYPTION_ACTIVE_KEY_ID:?required}
+      JWT_SECRET: ${JWT_SECRET:?required}
+      EMAIL_LOOKUP_HMAC_KEY: ${EMAIL_LOOKUP_HMAC_KEY:?required}
+      ANALYSIS_PROVIDER: ${ANALYSIS_PROVIDER:?required}
+    command:
+      - python
+      - -m
+      - backend.app.workers.analysis_worker
+    stop_grace_period: 150s
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

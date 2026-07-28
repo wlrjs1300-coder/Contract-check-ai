@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 import os
@@ -12,6 +12,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
+from backend.app.core.logging import configure_logging, log_event
 from backend.app.db.database import SessionLocal
 from backend.app.db.models import AnalysisJob, AnalysisResultItem, Document
 from backend.app.services.analysis_job_queue import (
@@ -25,7 +26,7 @@ from backend.app.services.analysis_pipeline import run_analysis_pipeline
 from backend.app.services.analysis_provider_factory import create_analysis_provider
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("worker")
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ def _heartbeat_loop(
 
 
 def process_job(job_id: str, config: WorkerConfig) -> str:
+    attempts = 0
     heartbeat_stop = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat_loop,
@@ -91,7 +93,7 @@ def process_job(job_id: str, config: WorkerConfig) -> str:
         daemon=True,
     )
     heartbeat.start()
-    started = time.monotonic()
+    started = time.perf_counter()
     try:
         with SessionLocal() as db:
             job = db.scalar(
@@ -115,6 +117,7 @@ def process_job(job_id: str, config: WorkerConfig) -> str:
                 )
             )
             try:
+                attempts = job.attempt_count
                 run_analysis_pipeline(
                     db=db,
                     job=job,
@@ -132,12 +135,34 @@ def process_job(job_id: str, config: WorkerConfig) -> str:
                     worker_id=config.worker_id,
                     error=exc,
                 )
-        logger.info(
-            "analysis_job_finished job_id=%s worker_id=%s outcome=%s duration_ms=%d",
-            job_id,
-            config.worker_id,
-            outcome,
-            int((time.monotonic() - started) * 1000),
+                failed_job = db.get(AnalysisJob, job_id)
+                safe_error_code = (
+                    failed_job.last_error_code
+                    if failed_job is not None
+                    else "analysis_claim_lost"
+                )
+                log_event(
+                    logger=logger,
+                    event="analysis_job_failure",
+                    service="worker",
+                    status=outcome,
+                    worker_id=config.worker_id,
+                    job_id=job_id,
+                    attempt_count=attempts,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    safe_error_code=safe_error_code,
+                )
+                return outcome
+
+        log_event(
+            logger=logger,
+            event="analysis_job_finished",
+            service="worker",
+            status=outcome,
+            worker_id=config.worker_id,
+            job_id=job_id,
+            attempt_count=attempts,
+            duration_ms=int((time.perf_counter() - started) * 1000),
         )
         return outcome
     finally:
@@ -153,7 +178,14 @@ def run_worker(
     worker_config = config or load_worker_config()
     worker_config.validate()
     shutdown = stop_event or threading.Event()
-    logger.info("analysis_worker_started worker_id=%s", worker_config.worker_id)
+    logger = logging.getLogger("worker")
+    log_event(
+        logger=logger,
+        event="analysis_worker_started",
+        service="worker",
+        status="started",
+        worker_id=worker_config.worker_id,
+    )
     while not shutdown.is_set():
         with SessionLocal() as db:
             recover_stale_jobs(db)
@@ -167,11 +199,17 @@ def run_worker(
             shutdown.wait(worker_config.poll_seconds)
             continue
         process_job(job.id, worker_config)
-    logger.info("analysis_worker_stopped worker_id=%s", worker_config.worker_id)
+    log_event(
+        logger=logger,
+        event="analysis_worker_stopped",
+        service="worker",
+        status="stopped",
+        worker_id=worker_config.worker_id,
+    )
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_logging("worker")
     stop_event = threading.Event()
 
     def request_shutdown(_signum: int, _frame: object) -> None:
