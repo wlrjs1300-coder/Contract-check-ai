@@ -1,12 +1,18 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+import logging
+import re
+
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
 from backend.app.core.auth import get_current_user
+from backend.app.core.boundary_config import get_boundary_config
+from backend.app.core.logging import log_event
+from backend.app.core.rate_limit import enforce_user_rate_limit
 from backend.app.core.encryption_config import EncryptionKeyring, get_encryption_keyring
 from backend.app.db.models import (
     AnalysisJob,
@@ -44,8 +50,41 @@ from backend.app.services.scalar_encryption import (
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-MAX_FILE_SIZE = 1 * 1024 * 1024
 ALLOWED_SUFFIXES = {".txt"}
+ALLOWED_TEXT_CONTENT_TYPES = {"text/plain"}
+UPLOAD_CHUNK_SIZE = 64 * 1024
+_DANGEROUS_INNER_SUFFIXES = {
+    ".bat", ".cmd", ".com", ".exe", ".html", ".js", ".pdf", ".ps1", ".py",
+    ".sh", ".tar", ".zip",
+}
+
+
+def _upload_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+    )
+
+
+def _validate_text_filename(filename: str) -> None:
+    if (
+        not filename
+        or len(filename) > 255
+        or filename != filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+        or ".." in filename
+        or re.search(r"[\x00-\x1f\x7f]", filename)
+        or any(encoded in filename.lower() for encoded in ("%00", "%0a", "%0d"))
+    ):
+        raise _upload_error(400, "INVALID_FILENAME", "The filename is invalid.")
+    path = Path(filename)
+    if path.suffix.lower() not in ALLOWED_SUFFIXES:
+        raise _upload_error(
+            415, "UNSUPPORTED_FILE_TYPE", "Only UTF-8 text files are supported."
+        )
+    if Path(path.stem).suffix.lower() in _DANGEROUS_INNER_SUFFIXES:
+        raise _upload_error(
+            415, "UNSUPPORTED_FILE_TYPE", "Only UTF-8 text files are supported."
+        )
 
 
 def _serialize_clause(
@@ -515,42 +554,56 @@ def _get_extraction_snapshot(
     return [item for item in snapshot if isinstance(item, dict)]
 
 
-@router.post("/upload")
+@router.post(
+    "/upload",
+    dependencies=[Depends(enforce_user_rate_limit("upload"))],
+)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
     filename = file.filename or ""
-    suffix = Path(filename).suffix.lower()
-
-    if suffix not in ALLOWED_SUFFIXES:
-        raise HTTPException(
-            status_code=400,
-            detail="Only .txt files are allowed.",
+    _validate_text_filename(filename)
+    if file.content_type not in ALLOWED_TEXT_CONTENT_TYPES:
+        raise _upload_error(
+            415,
+            "UNSUPPORTED_FILE_TYPE",
+            "The uploaded file content type is not supported.",
         )
 
-    content = await file.read()
+    max_upload_bytes = min(get_boundary_config().max_upload_bytes, 1 * 1024 * 1024)
+    content = bytearray()
+    while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+        content.extend(chunk)
+        if len(content) > max_upload_bytes:
+            log_event(
+                logger=logging.getLogger("api"),
+                event="upload_rejected",
+                service="api",
+                status=413,
+                request_id=getattr(request.state, "request_id", None),
+                safe_error_code="UPLOAD_TOO_LARGE",
+                extra={"file_size": len(content), "content_type_category": "text"},
+            )
+            raise _upload_error(
+                413, "UPLOAD_TOO_LARGE", "The uploaded file is too large."
+            )
 
     if not content:
-        raise HTTPException(
-            status_code=400,
-            detail="The uploaded file is empty.",
-        )
-
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail="The uploaded file exceeds the 1 MB limit.",
-        )
+        raise _upload_error(400, "EMPTY_FILE", "The uploaded file is empty.")
 
     try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="The uploaded file must be UTF-8 encoded.",
-        ) from exc
+        text = bytes(content).decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise _upload_error(
+            415, "UNSUPPORTED_FILE_TYPE", "The text file must use UTF-8 encoding."
+        ) from None
+    if "\x00" in text:
+        raise _upload_error(
+            400, "MALFORMED_DOCUMENT", "The text document is malformed."
+        )
 
     document_id = str(uuid4())
     clause_result = split_clauses(text, document_id)
@@ -626,6 +679,14 @@ async def upload_document(
     db.add(document)
     db.commit()
     db.refresh(document)
+    log_event(
+        logger=logging.getLogger("api"),
+        event="upload_completed",
+        service="api",
+        status=200,
+        request_id=getattr(request.state, "request_id", None),
+        extra={"file_size": len(content), "content_type_category": "text"},
+    )
 
     return _serialize_document(document, keyring=keyring)
 

@@ -29,6 +29,15 @@ os.environ.setdefault(
         ]
     ),
 )
+os.environ.setdefault("RATE_LIMIT_LOGIN", "1000")
+os.environ.setdefault("RATE_LIMIT_REGISTER", "1000")
+os.environ.setdefault("RATE_LIMIT_UPLOAD", "1000")
+os.environ.setdefault("RATE_LIMIT_EXTRACTION", "1000")
+os.environ.setdefault("RATE_LIMIT_ANALYSIS_JOB", "1000")
+os.environ.setdefault("RATE_LIMIT_WINDOW_SECONDS", "60")
+os.environ.setdefault("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024))
+os.environ.setdefault("MAX_EXTRACTED_CHARACTERS", "2000000")
+os.environ.setdefault("MAX_DOCUMENT_PAGES", "100")
 
 import pytest
 from fastapi import Depends
@@ -104,6 +113,9 @@ app.dependency_overrides[get_current_user] = override_get_current_user
 
 @pytest.fixture(autouse=True)
 def reset_test_database():
+    from backend.app.core.rate_limit import rate_limiter
+
+    rate_limiter.reset()
     Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
 
@@ -131,3 +143,10 @@ def db_session():
 @pytest.fixture
 def sqlite_test_engine():
     return test_engine
+
+
+@pytest.fixture
+def client():
+    from fastapi.testclient import TestClient
+
+    return TestClient(app)

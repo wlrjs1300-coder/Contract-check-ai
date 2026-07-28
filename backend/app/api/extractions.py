@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from datetime import UTC, datetime
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -14,6 +15,7 @@ from fastapi import (
     File,
     Header,
     HTTPException,
+    Request,
     UploadFile,
     status,
 )
@@ -22,6 +24,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
 from backend.app.core.auth import get_current_user
+from backend.app.core.boundary_config import get_boundary_config
+from backend.app.core.logging import log_event
+from backend.app.core.rate_limit import enforce_user_rate_limit
 from backend.app.db.models import Extraction, ExtractionPage
 from backend.app.db.models import User
 from backend.app.schemas.extractions import (
@@ -101,6 +106,10 @@ from backend.app.services.nested_json_encryption import (
 
 MAX_PAGE_REVIEW_TEXT = 200_000
 MAX_DOCUMENT_REVIEW_TEXT = 1_000_000
+_DANGEROUS_INNER_SUFFIXES = {
+    ".bat", ".cmd", ".com", ".exe", ".html", ".js", ".ps1", ".py", ".sh",
+    ".tar", ".zip",
+}
 
 
 
@@ -146,6 +155,25 @@ def _safe_filename_display(filename: str) -> str:
     basename = filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
     sanitized = re.sub(r"[\x00-\x1f\x7f]", "", basename).strip()
     return (sanitized or "document.pdf")[:255]
+
+
+def _validate_pdf_filename(filename: str) -> None:
+    if (
+        not filename
+        or len(filename) > 255
+        or filename != filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+        or ".." in filename
+        or re.search(r"[\x00-\x1f\x7f]", filename)
+        or Path(filename).suffix.lower() != ".pdf"
+        or Path(Path(filename).stem).suffix.lower() in _DANGEROUS_INNER_SUFFIXES
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail=_error_detail(
+                "UNSUPPORTED_FILE_TYPE",
+                "Only PDF files are supported for text extraction.",
+            ),
+        )
 
 
 def _to_iso_timestamp(value: datetime | None) -> str | None:
@@ -928,8 +956,10 @@ def _process_pdf_pages(
     response_model=ExtractionResponse,
     status_code=status.HTTP_201_CREATED,
     responses=ERROR_RESPONSES,
+    dependencies=[Depends(enforce_user_rate_limit("extraction"))],
 )
 async def create_extraction(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -938,20 +968,13 @@ async def create_extraction(
 ) -> ExtractionResponse:
     filename = file.filename or ""
 
-    if Path(filename).suffix.lower() != ".pdf":
-        raise HTTPException(
-            status_code=400,
-            detail=_error_detail(
-                "unsupported_file_type",
-                "Only PDF files are supported for text extraction.",
-            ),
-        )
+    _validate_pdf_filename(filename)
 
     if file.content_type not in PDF_CONTENT_TYPES:
         raise HTTPException(
-            status_code=400,
+            status_code=415,
             detail=_error_detail(
-                "file_type_mismatch",
+                "UNSUPPORTED_FILE_TYPE",
                 "The uploaded file does not match the PDF format.",
             ),
         )
@@ -967,10 +990,11 @@ async def create_extraction(
     try:
         request_directory = create_request_directory()
         source_path = create_server_file_path(request_directory)
+        boundary_config = get_boundary_config()
         size_bytes = await write_upload_to_temp(
             file,
             source_path,
-            max_size_bytes=MAX_PDF_SIZE_BYTES,
+            max_size_bytes=min(MAX_PDF_SIZE_BYTES, boundary_config.max_upload_bytes),
         )
         request_directory = _refresh_lease_or_fail(request_directory)
 
@@ -990,12 +1014,36 @@ async def create_extraction(
                 pdf_renderer,
             )
         )
+        if len(processed_pages) > boundary_config.max_document_pages:
+            raise PDFExtractionError(
+                "EXTRACTION_LIMIT_EXCEEDED",
+                "The document exceeds the extraction page limit.",
+                status_code=413,
+            )
+        extracted_characters = sum(
+            len(str(page.get("text", ""))) for page in processed_pages
+        )
+        if extracted_characters > boundary_config.max_extracted_characters:
+            raise PDFExtractionError(
+                "EXTRACTION_LIMIT_EXCEEDED",
+                "The document exceeds the extraction text limit.",
+                status_code=413,
+            )
+        if (
+            not any(str(page.get("text", "")).strip() for page in processed_pages)
+            and extraction_summary.get("failed_pages", 0) == 0
+        ):
+            raise PDFExtractionError(
+                "MALFORMED_DOCUMENT",
+                "No usable text could be extracted from the document.",
+                status_code=422,
+            )
     except UploadSizeLimitExceededError:
         pending_error = HTTPException(
             status_code=413,
             detail=_error_detail(
-                "file_size_limit_exceeded",
-                "The PDF file exceeds the 20 MiB limit.",
+                "UPLOAD_TOO_LARGE",
+                "The uploaded file is too large.",
             ),
         )
     except PDFExtractionError as exc:
@@ -1038,6 +1086,14 @@ async def create_extraction(
         try:
             cleanup_request_directory(request_directory)
         except OriginalCleanupError as exc:
+            log_event(
+                logger=logging.getLogger("api"),
+                event="temporary_cleanup_failed",
+                service="api",
+                status=500,
+                request_id=getattr(request.state, "request_id", None),
+                safe_error_code="TEMPORARY_STORAGE_ERROR",
+            )
             raise HTTPException(
                 status_code=500,
                 detail=_error_detail(
@@ -1047,6 +1103,20 @@ async def create_extraction(
             ) from exc
 
     if pending_error is not None:
+        error_code = (
+            pending_error.detail.get("code", "MALFORMED_DOCUMENT")
+            if isinstance(pending_error.detail, dict)
+            else "MALFORMED_DOCUMENT"
+        )
+        log_event(
+            logger=logging.getLogger("api"),
+            event="extraction_rejected",
+            service="api",
+            status=pending_error.status_code,
+            request_id=getattr(request.state, "request_id", None),
+            safe_error_code=str(error_code),
+            extra={"file_size": size_bytes, "content_type_category": "pdf"},
+        )
         raise pending_error
 
     if extracted_pdf is None:

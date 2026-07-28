@@ -16,6 +16,7 @@ from backend.app.core.auth import (
     resolve_user_email,
 )
 from backend.app.core.email_lookup import build_email_lookup_hash
+from backend.app.core.rate_limit import enforce_public_rate_limit
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.db.database import get_db
 from backend.app.db.models import User
@@ -36,7 +37,11 @@ from backend.app.schemas.auth import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=AuthRegisterResponse)
+@router.post(
+    "/register",
+    response_model=AuthRegisterResponse,
+    dependencies=[Depends(enforce_public_rate_limit("register"))],
+)
 def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> AuthRegisterResponse:
     email = normalize_and_validate_email(payload.email)
     try:
@@ -95,7 +100,11 @@ def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> Aut
     )
 
 
-@router.post("/login", response_model=AuthLoginResponse)
+@router.post(
+    "/login",
+    response_model=AuthLoginResponse,
+    dependencies=[Depends(enforce_public_rate_limit("login"))],
+)
 def login(
     payload: AuthLoginRequest,
     db: Session = Depends(get_db),

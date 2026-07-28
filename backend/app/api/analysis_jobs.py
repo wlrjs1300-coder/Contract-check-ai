@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.app.db.database import get_db
 from backend.app.core.auth import get_current_user
+from backend.app.core.rate_limit import enforce_user_rate_limit
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction, User
 from backend.app.services.clause_splitter import split_clauses_with_snapshot
@@ -394,7 +395,10 @@ def _load_or_create_analysis_document(
     return document.id
 
 
-@router.post("/documents/{document_id}/analysis-jobs")
+@router.post(
+    "/documents/{document_id}/analysis-jobs",
+    dependencies=[Depends(enforce_user_rate_limit("analysis_job"))],
+)
 def create_analysis_job(
     document_id: str,
     db: Session = Depends(get_db),
@@ -433,7 +437,10 @@ def create_analysis_job(
     return {"job_id": job.id, "document_id": job.document_id, "status": job.status}
 
 
-@router.post("/extractions/{extraction_id}/analysis-jobs")
+@router.post(
+    "/extractions/{extraction_id}/analysis-jobs",
+    dependencies=[Depends(enforce_user_rate_limit("analysis_job"))],
+)
 def create_extraction_analysis_job(
     extraction_id: str,
     if_match: str | None = Header(default=None, alias="If-Match"),

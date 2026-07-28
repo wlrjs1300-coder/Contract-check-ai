@@ -29,6 +29,15 @@ def _production_env(monkeypatch) -> dict[str, str]:
         "DEBUG": "false",
         "UVICORN_RELOAD": "false",
         "ANALYSIS_PROVIDER": "unavailable",
+        "MAX_UPLOAD_BYTES": str(20 * 1024 * 1024),
+        "MAX_EXTRACTED_CHARACTERS": "2000000",
+        "MAX_DOCUMENT_PAGES": "100",
+        "RATE_LIMIT_LOGIN": "10",
+        "RATE_LIMIT_REGISTER": "5",
+        "RATE_LIMIT_UPLOAD": "10",
+        "RATE_LIMIT_EXTRACTION": "20",
+        "RATE_LIMIT_ANALYSIS_JOB": "10",
+        "RATE_LIMIT_WINDOW_SECONDS": "60",
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)

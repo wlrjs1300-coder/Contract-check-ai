@@ -109,6 +109,7 @@ app = FastAPI(
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
     request_id = _coerce_request_id(request.headers.get(_REQUEST_ID_HEADER))
+    request.state.request_id = request_id
     job_id = _coerce_job_id(request.headers.get("X-Job-ID"))
     start = time.perf_counter()
 
@@ -116,7 +117,7 @@ async def request_logging_middleware(request: Request, call_next):
 
     try:
         response = await call_next(request)
-    except Exception as exc:
+    except Exception:
         duration_ms = int((time.perf_counter() - start) * 1000)
         log_event(
             logger=logger,
@@ -126,7 +127,7 @@ async def request_logging_middleware(request: Request, call_next):
             request_id=request_id,
             job_id=job_id,
             duration_ms=duration_ms,
-            safe_error_code=type(exc).__name__,
+            safe_error_code="UNHANDLED_REQUEST_ERROR",
         )
         raise
 
