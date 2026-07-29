@@ -2,172 +2,178 @@
 
 ## 문서 목적
 
-현재 기술 검증 MVP를 외부에서 시연하기 전에 필요한 조건과 미준비 항목을 플랫폼에 종속되지 않게 정리한다. 이 문서는 실제 배포 승인이나 특정 플랫폼 확정을 의미하지 않는다.
+현재 기술 검증 MVP를 외부 환경의 제한적 합성 데이터 파일럿 후보로 검토하기 위한 플랫폼 중립 기준을 정의한다. 이 문서는 특정 플랫폼 선정, production 배포 완료, 실제 계약서·개인정보 처리 승인 또는 실제 외부 Provider 사용 승인을 의미하지 않는다.
+
+현재 구현의 기준선은 v0.8.0 release closure와 v0.9.0 운영 준비 로드맵이다. 과거 SQLite와 초기 분석 실행 구조 중심의 배포 문서는 당시 기록이며 현재 실행 구조의 근거로 사용하지 않는다.
 
 ## 현재 배포 가능 범위
 
-현재 코드는 다음 범위의 제한된 합성 데이터 시연 후보로 검토할 수 있다.
+현재 코드는 다음 요소를 갖춘 제한적 합성 데이터 파일럿 후보이다.
 
-- React 정적 Frontend build
-- FastAPI API와 Uvicorn 실행
-- UTF-8 TXT 한 파일, 최대 1 MiB 업로드
-- SQLite 단일 인스턴스
-- 합성 Provider 기반 분석 흐름
-- `GET /health` 상태 확인
+- React 정적 Frontend build와 공개 `VITE_API_BASE_URL`
+- FastAPI API와 별도 DB polling worker
+- MySQL 8.4 Compose service와 named volume
+- Alembic revision `0001`~`0006` 및 migration one-shot
+- JWT 인증, 사용자별 ownership과 교차 사용자 접근 차단
+- AES-256-GCM 저장 암호화, keyring과 HMAC email lookup
+- TXT/PDF·이미지 입력 경계, 임시 원본 cleanup과 orphan sweep
+- durable analysis jobs, lease·heartbeat·retry·stale recovery
+- `/health` liveness와 DB·migration을 검사하는 `/ready`
+- production runtime 설정 fail-closed와 structured operational logging
 
-실제 계약서나 실제 개인정보를 처리하는 공개 서비스로는 배포할 수 없다. 인증과 사용자별 접근 제어가 없고 분리된 조항 본문이 DB에 저장되기 때문이다.
+로컬 Docker Desktop에서 MySQL, migration, API와 worker를 연결한 synthetic smoke는 완료됐다. 이는 실제 배포 환경의 HTTPS, 복구성, Secret custody, 관측성과 운영 책임을 검증한 결과가 아니다.
 
-## 배포 전 필수 조건
+## 현재 미완료 또는 미확정 범위
 
-- [ ] 시연 범위를 합성 데이터로 제한하고 사용자 화면에 현재 상태 표시
-- [ ] Frontend와 Backend 배포 주소 확정
-- [ ] Backend의 `CORS_ALLOWED_ORIGINS`를 실제 Frontend origin으로 제한
-- [ ] Frontend의 `VITE_API_BASE_URL`을 공개 가능한 Backend HTTPS 주소로 설정
-- [ ] Backend DB의 영속성, 접근 권한, backup과 복구 정책 확정
-- [ ] 업로드 문서, 조항 본문과 로그의 보관·삭제 정책 확정
-- [ ] 실제 비밀값을 Backend 전용 Secret 관리 기능에 저장
-- [ ] HTTPS 적용과 HTTP 요청 차단 확인
-- [ ] 프로세스 재시작 정책과 health check 연동
-- [ ] 오류 응답, 로그와 모니터링에서 문서 내용 미노출 확인
-- [ ] 배포 후 전체 smoke test 수행
-- [ ] 실제 계약서 입력 차단 또는 별도 승인 절차 마련
+- 실제 배포 플랫폼, 운영 주소와 조직별 운영 책임
+- HTTPS/TLS 종단, HTTP 차단과 trusted proxy 경계
+- 외부 Secret 저장소, 접근 검토, 교체·폐기·복구 절차
+- MySQL backup·restore, 보존·폐기와 복구 rehearsal
+- audit/security event 체계, 외부 로그 수집, 지표·경보와 보존
+- 실제 외부 Provider adapter, Provider 데이터 처리 조건과 credential
+- 실제 계약서·실제 개인정보 사용 승인
+- 사용자 삭제·탈퇴·만료 파기와 backup 재등장 방지
+- 다중 replica 전역 rate limit과 독립 보안 평가
 
-## Frontend 배포 고려사항
+## 개발 실행과 production 실행의 구분
 
-- `npm.cmd run build` 결과를 정적 자산으로 배포한다.
-- SPA의 현재 단일 화면 진입과 정적 자산 경로를 확인한다.
-- `VITE_API_BASE_URL`은 build 시 브라우저 코드에 포함될 수 있는 공개 API 주소이며 Secret이 아니다.
-- 어떠한 API Key, credential 또는 운영 비밀값도 `VITE_` 변수에 저장하지 않는다.
-- Backend와 다른 origin을 사용하므로 CORS 설정을 함께 검증한다.
-- 네트워크 실패, Backend 재시작과 잘못된 응답에서도 내부 정보를 노출하지 않는지 확인한다.
-- 실제 screen reader, 키보드 전체 흐름과 전문 색상 대비를 배포 전 수동 검증한다.
+개발·테스트에서는 `DATABASE_URL`이 없으면 SQLite 기본값을 사용할 수 있고 일부 경계 설정에 안전한 기본값이 적용된다. 이는 로컬 개발 편의를 위한 동작이다.
 
-## Backend 배포 고려사항
+`APP_ENV=production` 또는 `prod`에서는 다음 조건을 fail-closed로 검사한다.
 
-- Python과 `backend/requirements.txt`에 맞는 실행 환경을 사용한다.
-- 애플리케이션 import 경로가 유지되도록 저장소 루트에서 Uvicorn을 실행한다.
-- 프로세스 수와 SQLite 연결 방식의 호환성을 검토한다.
-- `GET /health`를 상태 확인에 사용하되 DB와 의존 서비스 준비 상태까지 보장하는 endpoint로 확대 해석하지 않는다.
-- 업로드 크기 제한은 애플리케이션의 1 MiB뿐 아니라 reverse proxy와 플랫폼 제한도 확인한다.
-- 운영 오류에 stack trace, 조항 본문, 마스킹 전 텍스트와 Provider 원시 응답을 남기지 않는다.
-- 현재 분석은 요청 안에서 동기 실행되므로 요청 timeout과 프로세스 재시작 영향을 검토한다.
+- `DATABASE_URL`이 명시되고 SQLite가 아닐 것
+- JWT, data encryption keyring과 email lookup HMAC key가 유효하고 약한 값이 아닐 것
+- `CORS_ALLOWED_ORIGINS`가 명시된 비-local origin이며 wildcard가 아닐 것
+- debug와 reload control이 활성화되지 않을 것
+- synthetic/fake/default placeholder가 아닌 허용된 Provider 상태일 것
+- 업로드·추출·페이지·rate limit 경계값이 모두 명시되고 허용 범위 안일 것
 
-## DB 고려사항
-
-현재 SQLite는 단일 인스턴스 기술 검증에 적합하다. 다중 인스턴스, 동시 쓰기, 무중단 배포와 장기 운영을 전제로 한 구성이 아니다.
-
-- Backend 기본값은 `sqlite:///./contract_check.db`다.
-- DB에는 문서 메타데이터뿐 아니라 분리된 조항 본문이 저장된다.
-- 사용자별 접근 제어와 데이터 소유권 모델이 없다.
-- schema migration 도구와 운영 migration 절차가 없다.
-- backup, restore, retention과 안전한 삭제 정책이 없다.
-- 임시 filesystem을 사용하는 배포 환경에서는 재시작 시 DB가 사라질 수 있다.
-
-외부 공개 전에는 영속 저장소 선택과 migration, backup·restore, 암호화, 최소 권한, 보관 기간과 삭제 절차를 별도 설계해야 한다.
+현재 production validation이 통과할 수 있다는 사실은 실제 Provider가 연결되거나 production 배포가 승인됐다는 뜻이 아니다.
 
 ## 환경변수
 
-| 이름 | 현재 목적 | 기본값 | 운영 원칙 |
+### Compose에서 요구하는 변수
+
+| 분류 | 이름 | 사용 서비스 | 운영 원칙 |
 |---|---|---|---|
-| `DATABASE_URL` | SQLAlchemy 연결 주소 | `sqlite:///./contract_check.db` | Backend에서만 설정하고 DB credential이 포함되면 Secret으로 관리 |
-| `CORS_ALLOWED_ORIGINS` | 허용 Frontend origin | `http://localhost:5173` | 실제 HTTPS Frontend origin만 명시 |
-| `VITE_API_BASE_URL` | 공개 API 기본 주소 | `http://localhost:8000` | 공개 가능한 HTTPS URL만 사용, Secret 금지 |
+| 실행 설정 | `APP_ENV` | Compose가 API·worker·migrate에 `production` 설정 | Secret 아님 |
+| DB 설정/Secret | `DATABASE_URL` | API, worker, migrate | credential 포함 가능, Backend 전용 |
+| DB 초기화 | `MYSQL_DATABASE`, `MYSQL_USER` | MySQL | 공개 Frontend에 노출하지 않음 |
+| DB Secret | `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | MySQL | 전용 Secret 주입 필요 |
+| 암호화 Secret | `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID` | API, worker, migrate | 실제 key 값 기록·로그 금지 |
+| 인증 Secret | `JWT_SECRET` | API, worker, migrate | 강한 독립 값 사용 |
+| lookup Secret | `EMAIL_LOOKUP_HMAC_KEY` | API, worker, migrate | 암호화 key와 분리 |
+| 공개 운영 설정 | `CORS_ALLOWED_ORIGINS` | API, migrate | 실제 HTTPS Frontend origin만 허용 |
+| Provider 설정 | `ANALYSIS_PROVIDER` | API, worker, migrate | production에서 synthetic/fake 차단 |
+| 입력 경계 | `MAX_UPLOAD_BYTES`, `MAX_EXTRACTED_CHARACTERS`, `MAX_DOCUMENT_PAGES` | API, worker, migrate | 허용 상한 안의 명시값 |
+| 요청 제한 | `RATE_LIMIT_LOGIN`, `RATE_LIMIT_REGISTER`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_EXTRACTION`, `RATE_LIMIT_ANALYSIS_JOB`, `RATE_LIMIT_WINDOW_SECONDS` | API, worker, migrate | 현재 limiter는 프로세스 단위 |
 
-실제 `.env`는 커밋하지 않는다. 배포 환경에서는 플랫폼 또는 조직의 환경변수·Secret 관리 기능을 사용한다.
+### 코드에 존재하는 선택 설정
 
-## CORS
+| 이름 | 목적 | 비고 |
+|---|---|---|
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | access token 만료 | 코드의 제한 범위 적용 |
+| `ANALYSIS_WORKER_ID`, `ANALYSIS_WORKER_POLL_SECONDS` | worker 식별·poll 주기 | 기본값 존재 |
+| `ANALYSIS_JOB_LEASE_SECONDS`, `ANALYSIS_JOB_HEARTBEAT_SECONDS`, `ANALYSIS_JOB_MAX_ATTEMPTS` | durable job lease·retry | 기본값 존재 |
+| `EXTRACTION_TEMP_ROOT` | 격리 temp root | 실제 운영 filesystem 경계 검토 필요 |
+| `EXTRACTION_ORPHAN_TTL_SECONDS`, `EXTRACTION_ORPHAN_CLEANUP_RETRY_COUNT`, `EXTRACTION_ORPHAN_CLEANUP_RETRY_DELAY_SECONDS` | orphan sweep | 제한된 기본값 존재 |
+| `OCR_ADAPTER`, `TESSERACT_CMD` | OCR adapter·실행 경로 | 환경별 의존성 검증 필요 |
+| `DEBUG`, `UVICORN_RELOAD` | 개발 control | production에서 활성화 금지 |
+| `VITE_API_BASE_URL` | 브라우저의 API base URL | 공개 HTTPS URL, Secret 금지 |
 
-- 운영에서는 실제 배포된 Frontend origin만 명시적으로 허용한다.
-- wildcard origin은 사용하지 않는다. 현재 코드도 wildcard를 거부한다.
-- origin에는 path, query와 fragment를 넣지 않는다.
-- 허용 method는 현재 `GET`, `POST`, header는 `Accept`, `Content-Type`으로 제한되어 있다.
-- 현재 `allow_credentials=False`이며 CORS는 인증·인가를 대체하지 않는다.
-- preview 주소를 허용해야 한다면 무제한 pattern 대신 승인된 origin 관리 절차가 필요하다.
+환경변수 이름만 문서화한다. 실제 값은 source, build argument, image layer, Frontend bundle, 명령 기록과 로그에 넣지 않는다. 외부 Secret 저장·주입 제품과 rotation 절차는 v0.9.0 후속 PR에서 결정한다.
 
-## 파일 업로드 제한
+## 배포 및 시작 순서
 
-- `.txt` 한 파일만 지원한다.
-- 최대 크기는 `1 * 1024 * 1024` bytes다.
-- Backend는 UTF-8과 UTF-8 BOM 입력을 처리한다.
-- PDF와 OCR은 지원하지 않는다.
-- 애플리케이션 검증 전에 proxy 또는 플랫폼이 더 작은 제한을 적용하지 않는지 확인한다.
-- 파일명에도 개인정보가 있을 수 있으므로 로그와 분석 도구에 불필요하게 전달하지 않는다.
+플랫폼과 무관하게 다음 순서를 유지한다.
 
-## 로그와 개인정보
+1. 합성 데이터 전용 환경인지 확인하고 실제 데이터 입력을 차단한다.
+2. HTTPS/trusted proxy, 네트워크와 Secret 주입이 아직 승인되지 않았다면 시작하지 않는다.
+3. MySQL을 시작하고 DB health가 정상인지 확인한다.
+4. migration one-shot으로 `alembic upgrade head`를 실행한다.
+5. migration exit code가 0이고 DB revision이 현재 head인지 확인한다.
+6. API를 시작한 뒤 worker를 시작한다.
+7. `/health`, `/ready`, API·worker 상태와 restart loop 부재를 확인한다.
+8. 합성 계정과 합성 문서만 사용해 인증·ownership·job·결과 조회 smoke를 수행한다.
+9. 로그에서 Secret, authorization header, email·filename·본문·raw exception 비노출을 확인한다.
 
-- 계약서 원문, 분리된 조항 본문과 마스킹 전 텍스트를 로그에 남기지 않는다.
-- Provider 최소 입력과 원시 응답도 운영 로그에 남기지 않는다.
-- 식별자, 상태, 안전한 오류 코드와 시간 정보만 필요한 범위에서 기록한다.
-- 로그 접근 권한, 보관 기간, 삭제, 전송 암호화와 사고 대응 절차를 정한다.
-- 오류 추적 서비스 도입 시 request body와 Frontend 사용자 입력 수집을 비활성화하거나 마스킹한다.
-- 실제 개인정보 탐지가 완전하지 않을 수 있음을 전제로 한다.
+DB health 또는 migration이 실패하면 API와 worker를 시작하지 않는다. `/ready`가 503이면 원인을 분석하고 배포 성공으로 기록하지 않는다. worker가 polling을 시작하지 않거나 restart loop에 들어가도 파일럿을 중단한다.
 
-## HTTPS와 Secret 관리
+## Health와 readiness
 
-- Frontend와 Backend 모두 HTTPS를 사용한다.
-- HTTP에서 HTTPS로의 전환과 mixed content 오류를 확인한다.
-- DB credential과 향후 Backend Provider credential은 Backend 전용 Secret으로 관리한다.
-- Secret을 source, build artifact, Frontend bundle, 로그와 문서에 넣지 않는다.
-- Secret 접근 권한과 교체 절차를 최소 권한 원칙으로 관리한다.
+- `/health`는 API process가 응답하는지 확인하는 liveness endpoint이며 `{"status":"ok"}`를 반환한다. DB나 migration 상태를 보장하지 않는다.
+- `/ready`는 DB에 `SELECT 1`을 수행하고 `alembic_version`이 현재 단일 head와 일치하는지 확인한다. 정상 시 `{"status":"ready"}`, 실패 시 본문을 최소화한 503 `{"status":"not_ready"}`를 반환한다.
+- worker는 HTTP endpoint를 제공하지 않는다. process 상태, restart count와 `analysis_worker_started` 등 structured event로 polling 시작을 확인한다.
+- Compose는 DB health 이후 migration, migration 성공 이후 API·worker라는 dependency를 가진다.
 
-## 프로세스 재시작과 헬스 체크
+## HTTPS, reverse proxy와 CORS
 
-- Backend 프로세스의 자동 재시작과 종료 신호 처리 방식을 정한다.
-- 현재 동기 분석은 서버 재시작 후 복구되지 않는다.
-- 작업 생성 후 프로세스가 종료되면 사용자에게 안정적인 작업 복구를 제공할 수 없다.
-- health check 성공을 분석 작업 복구나 DB 쓰기 가능 상태의 보장으로 해석하지 않는다.
-- 배포 후 `/health`, CORS와 핵심 API smoke test를 별도로 수행한다.
+현재 저장소에는 TLS 종단이나 명시적 trusted proxy 정책이 없다. 배포 후보는 후속 PR에서 다음을 검증하기 전 외부 노출하지 않는다.
 
-## 비동기 작업 한계
+- Frontend와 API의 HTTPS 및 HTTP 차단 또는 redirect 책임
+- 신뢰할 proxy hop과 forwarded header 허용 범위
+- client가 전달 header로 scheme·주소·로그 metadata를 위조하지 못하는지
+- 실제 Frontend HTTPS origin만 포함한 `CORS_ALLOWED_ORIGINS`
+- proxy와 플랫폼의 request body limit이 애플리케이션 경계를 우회하지 않는지
 
-분석 파이프라인은 작업 생성 HTTP 요청 안에서 동기 실행된다. `queued`와 `processing` 상태가 응답에서 관찰되지 않을 수 있으며 Frontend는 장시간 자동 폴링하지 않는다.
+CORS는 인증·인가를 대체하지 않는다. 특정 reverse proxy나 hosting 제품은 아직 선정하지 않는다.
 
-운영 분석 시간이 요청 timeout을 넘을 수 있다면 durable queue, worker, idempotency, 재시도·backoff, 취소, timeout, 상태 복구와 실패 사유 저장을 별도로 설계해야 한다. 이번 공개 준비에서는 이를 구현하지 않는다.
+## DB, migration과 복구
 
-## 무료 배포 환경의 한계
+MySQL 연결과 migration 실행 기반은 구현됐지만 backup/restore 운영 절차는 미완료다. 제한적 파일럿 전에 synthetic DB를 사용해 다음을 별도 검증해야 한다.
 
-특정 플랫폼을 확정하지 않는다. 무료 또는 제한형 환경을 검토할 때 다음을 확인한다.
+- backup 대상과 temp 원본 경로의 backup 제외
+- backup 암호화, 접근 권한, 보존·폐기 책임
+- 격리 DB restore와 Alembic head 확인
+- restore 후 `/ready`, ownership과 암호화 row 정합성
+- migration 실패 시 중단·복구 판단과 재실행 조건
 
-- 유휴 상태 전환과 첫 요청 지연
-- ephemeral filesystem과 SQLite 데이터 유실
-- process·memory·CPU·request timeout 제한
-- background worker 지원 여부
-- custom domain과 HTTPS 지원 범위
-- 환경변수와 Secret 관리 기능
-- 로그 보관 및 개인정보 처리 조건
-- 네트워크와 DB 연결 제한
+실제 데이터 backfill, 무중단 migration, point-in-time recovery와 managed DB 제품은 확정되지 않았다.
 
-가격, 정책과 지원 범위는 변경될 수 있으므로 플랫폼 선택 시점에 공식 조건을 다시 확인한다.
+## 로그와 관측성
 
-## 배포 후 검증 항목
+현재 구현은 JSON structured operational log와 request correlation을 제공한다. HTTP 완료, upload 완료·거부, extraction 거부, temp cleanup 실패, rate limit 차단, worker 시작·종료·job 완료·실패가 현재 확인된 이벤트다. 민감 extra key를 거부하고 문자열 식별자를 제한된 문자와 길이로 정규화한다.
 
-- [ ] Frontend 첫 화면과 정적 자산 로드
-- [ ] `/health` 응답
-- [ ] 실제 Frontend origin의 CORS preflight와 API 요청
-- [ ] 명백한 합성 TXT 업로드와 조항 표시
-- [ ] 합성 분석 작업과 결과 조회
-- [ ] 새 문서 선택 시 이전 상태 초기화
-- [ ] 지원하지 않는 형식, 빈 파일과 초과 크기 오류
-- [ ] Backend 중단과 복구 후 재시도
-- [ ] 내부 오류, 본문과 식별자 미노출
-- [ ] 작은 화면과 키보드·screen reader·색상 대비
-- [ ] 로그에 원문과 개인정보가 없는지 확인
-- [ ] DB persistence와 재시작 동작 확인
+인증 성공·실패와 권한 거부를 목적별 audit/security event로 분류하는 체계, 외부 수집, 보존, 무결성, 접근 통제, 지표·경보는 미완료다. 외부 수집 도구를 도입할 때 request body, authorization header, email, filename, 계약 내용, Provider payload와 raw exception 수집을 차단해야 한다.
 
-## 현재 미준비 항목
+## 파일과 데이터 경계
 
-- 실제 배포 플랫폼과 운영 주소
-- 운영 DB와 migration
-- 인증·인가와 사용자별 접근 제어
-- 문서·조항 보관 및 삭제 정책
-- 운영 Secret 관리와 교체 절차
-- HTTPS·도메인·certificate 구성
-- 요청 제한, abuse 방지와 업로드 격리
-- 운영 로그·모니터링·경보와 사고 대응
-- 동기 분석 timeout과 작업 재시작 복구
-- 실제 Provider 승인과 데이터 처리 계약
-- 실제 screen reader·전문 대비 측정
+- TXT 직접 분석 흐름은 최대 1 MiB로 제한된다.
+- extraction 경로는 production에 명시되는 최대 upload bytes와 코드 상한 20 MiB 중 작은 값을 적용한다.
+- PDF는 최대 100페이지이며 추출 문자 상한도 별도 적용한다.
+- 임시 원본은 격리된 무작위 request directory에서 처리하고 성공·실패 cleanup과 startup orphan sweep을 수행한다.
+- DB에는 암호화된 민감 계약·추출·분석 데이터가 저장될 수 있다. 저장 암호화가 보존·삭제 정책을 대체하지 않는다.
+
+## 제한적 합성 데이터 smoke 기준
+
+- Frontend 정적 자산과 공개 API URL 확인
+- MySQL healthy와 migration exit code 0
+- Alembic current revision이 repository head와 일치
+- API running/healthy, `/health` 200과 `/ready` 200
+- worker running, polling 시작과 restart loop 부재
+- 합성 사용자 등록·로그인과 JWT 보호 route 확인
+- 두 합성 사용자 사이 document·extraction·analysis 접근 차단
+- upload·extraction 경계, durable job 생성·처리·결과 조회
+- DB 단절 또는 revision mismatch에서 `/ready` 503
+- 로그의 credential·token·key·본문·filename·로컬 경로 비노출
+- 종료 후 임시 자원 cleanup과 무관 resource 비영향
+
+실제로 실행하지 않은 항목은 통과로 기록하지 않는다.
+
+## 실제 데이터 사용 게이트
+
+v0.9.0 PR-1은 문서 정합화 작업이며 실제 데이터 사용 승인이 아니다. 실제 계약서 또는 실제 개인정보를 사용하려면 별도로 다음을 확정하고 검증해야 한다.
+
+- 처리 목적·법적 근거, 사용자 고지와 승인 주체
+- 보존·삭제 기간, 사용자 삭제·탈퇴와 backup 재등장 방지
+- HTTPS/trusted proxy와 접근 통제 검토
+- Secret custody·rotation·폐기와 incident response
+- audit/security event, 외부 관측성의 개인정보 차단
+- 실제 Provider 사용 시 데이터 처리 조건과 외부 전송 승인
+- 독립 보안·개인정보 검토
+
+그 전에는 명백한 합성 계정·합성 계약 데이터만 사용한다.
 
 ## 준비 판단
 
-**합성 데이터로 제한한 기술 시연은 조건부 준비 가능**하다. 실제 계약서와 실제 개인정보 처리는 인증, 접근 제어, 데이터 보관·삭제, 운영 DB, HTTPS와 보안 검토를 완료하기 전까지 금지한다.
+현재 저장소는 **플랫폼과 운영 통제를 추가 검증할 제한적 합성 데이터 파일럿 후보**다. MySQL·migration·API·worker·보안 기반의 구현과 로컬 smoke는 확인됐지만 HTTPS, trusted proxy, 외부 Secret 운영, backup/restore, 외부 observability와 실제 배포 플랫폼이 미완료이므로 production 배포 또는 실제 데이터 처리가 준비됐다고 판단하지 않는다.

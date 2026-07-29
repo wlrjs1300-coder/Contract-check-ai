@@ -2,9 +2,9 @@
 
 계약 문서를 조항 단위로 분리하고, 개인정보 보호와 출력 검증을 거쳐 위험 신호와 검토 권고를 제공하는 계약서 리스크 관리 MVP입니다.
 
-> **현재 상태: 개발 중 · 기술 검증 MVP**
+> **현재 상태: v0.8.0 기술 검증 MVP · v0.9.0 운영 준비 진행 중**
 >
-> 외부 모델을 연결하기 전에 결정론적 합성 Provider로 데이터 전달 경계, 결과 검증, 오류 처리와 Frontend·Backend 통합 구조를 먼저 검증했습니다. 실제 외부 Provider와 운영 환경은 아직 연결하지 않았습니다.
+> 결정론적 합성 Provider로 데이터 전달 경계, 결과 검증과 Frontend·Backend 통합 구조를 검증했습니다. MySQL·migration·API·worker의 로컬 Docker smoke는 완료했지만 실제 외부 Provider, 실제 배포 환경과 실제 개인정보 사용은 승인되거나 검증되지 않았습니다.
 
 ## 핵심 기술 포인트
 
@@ -46,17 +46,20 @@ UTF-8 TXT 선택 및 사전 검증
 
 ### Backend
 
-- FastAPI 기반 8개 REST API
+- FastAPI 기반 REST API와 JWT 인증
+- 사용자별 document·extraction·analysis ownership 및 교차 사용자 접근 차단
 - UTF-8 TXT 한 파일, 최대 1 MiB 입력 검증과 조항 분할
-- 별도 extraction API를 통한 텍스트 PDF 페이지별 직접 추출
+- 별도 extraction API를 통한 텍스트 PDF·이미지 OCR·스캔 PDF 처리와 사용자 확인
 - PDF 확장자·MIME·시그니처·암호화·손상·20 MiB·100페이지 검증
 - 저장소 밖 무작위 temp 경로와 성공·실패 cleanup 검증
-- SQLAlchemy·SQLite 기반 문서, 조항, 작업과 결과 저장
+- SQLAlchemy와 Alembic 기반 schema, 개발용 SQLite 기본값과 production용 MySQL 8.4 Compose
+- AES-256-GCM 저장 암호화, keyring과 HMAC 기반 email lookup
+- DB 기반 durable analysis job, 별도 worker, lease·heartbeat·retry·stale recovery
 - 교체 가능한 Provider 인터페이스와 `SyntheticAnalysisProvider`
 - 개인정보 탐지·마스킹, 잔여 개인정보와 출력 재생성 검사
 - 결과 schema, 허용 라벨과 `reference_id` 검증
 - 법률 확정·보장 표현 차단과 안전한 결과만 저장
-- Provider 오류 분류, 부분 결과 rollback과 실패 상태 보존
+- production runtime 설정 fail-closed, `/health`·`/ready`, structured operational logging
 
 ## 아키텍처
 
@@ -64,8 +67,10 @@ UTF-8 TXT 선택 및 사전 검증
 flowchart LR
     UI[React Frontend] --> API[FastAPI API]
     API --> DOC[TXT Validation and Clause Splitting]
-    DOC --> DB[(SQLite)]
-    API --> PIPE[Analysis Pipeline]
+    DOC --> DB[(SQLAlchemy DB)]
+    API --> JOB[Durable Job]
+    JOB --> WORKER[Analysis Worker]
+    WORKER --> PIPE[Analysis Pipeline]
     PIPE --> MASK[PII Detection and Masking]
     MASK --> SYN[Synthetic Provider]
     SYN --> VALID[Schema and Reference Validation]
@@ -84,7 +89,7 @@ flowchart LR
 | Frontend | React, TypeScript, Vite |
 | UI | Bootstrap 5, CSS |
 | Backend | Python, FastAPI, Uvicorn |
-| Database | SQLAlchemy, SQLite |
+| Database | SQLAlchemy, Alembic, SQLite (개발 기본값), MySQL 8.4 (Compose) |
 | Frontend testing | Vitest, Testing Library, jsdom |
 | Backend testing | pytest, FastAPI TestClient |
 | Quality | ESLint, Ruff |
@@ -124,17 +129,25 @@ npm.cmd run dev
 - Backend health: `http://localhost:8000/health`
 - API 문서: `http://localhost:8000/docs`
 
-별도 환경변수 없이 기본값으로 실행할 수 있으며 실제 `.env` 파일은 커밋하지 않습니다.
+Backend startup에는 최소한 `JWT_SECRET`, `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID`, `EMAIL_LOOKUP_HMAC_KEY`가 필요합니다. 개발용 합성값은 현재 PowerShell 세션에만 주입하고 실제 `.env` 파일이나 실제 Secret은 커밋하지 않습니다.
 
 ### 환경변수
 
-| 이름 | 목적 | 기본값 | Secret 여부 |
-|---|---|---|---|
-| `DATABASE_URL` | SQLAlchemy DB 연결 | `sqlite:///./contract_check.db` | 연결 정보에 따라 달라짐 |
-| `CORS_ALLOWED_ORIGINS` | 허용 Frontend origin | `http://localhost:5173` | 아님 |
-| `VITE_API_BASE_URL` | 브라우저가 호출할 API 주소 | `http://localhost:8000` | 아님 |
+개발 기본값과 production Compose 요구사항은 다릅니다. `APP_ENV=production`에서는 SQLite, 누락된 운영 경계값, 약한 Secret, 부적절한 CORS와 허용되지 않은 Provider 설정을 거부합니다.
 
-`CORS_ALLOWED_ORIGINS`는 쉼표로 여러 origin을 받을 수 있지만 wildcard를 거부합니다. `VITE_` 변수는 브라우저에 노출될 수 있으므로 비밀값을 넣지 않습니다.
+| 분류 | 이름 | 목적 | production 원칙 |
+|---|---|---|---|
+| 실행 설정 | `APP_ENV` | test/development/production 구분 | `production` 또는 `prod`를 명시 |
+| Secret | `DATABASE_URL` | SQLAlchemy DB 연결 | credential 포함 가능, Backend에만 주입하고 SQLite 금지 |
+| Secret | `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID` | 저장 암호화 keyring | Backend 전용 저장·주입 |
+| Secret | `JWT_SECRET`, `EMAIL_LOOKUP_HMAC_KEY` | JWT 서명과 email lookup | 서로 독립된 강한 값 사용 |
+| 공개 운영 설정 | `CORS_ALLOWED_ORIGINS`, `ANALYSIS_PROVIDER` | 허용 origin과 Provider 모드 | 명시값 필수, wildcard와 synthetic/fake Provider 금지 |
+| 경계 설정 | `MAX_UPLOAD_BYTES`, `MAX_EXTRACTED_CHARACTERS`, `MAX_DOCUMENT_PAGES` | 업로드·추출 상한 | Compose에서 명시 |
+| 경계 설정 | `RATE_LIMIT_LOGIN`, `RATE_LIMIT_REGISTER`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_EXTRACTION`, `RATE_LIMIT_ANALYSIS_JOB`, `RATE_LIMIT_WINDOW_SECONDS` | 프로세스 단위 요청 제한 | Compose에서 명시 |
+| DB 컨테이너 | `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | MySQL 초기화 | password는 Secret, API에 노출 금지 |
+| Frontend 공개 설정 | `VITE_API_BASE_URL` | 브라우저의 API 주소 | 공개 HTTPS URL만 사용, Secret 금지 |
+
+`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, worker polling·lease·heartbeat 설정과 temp/orphan cleanup 설정은 코드에 선택적 기본값이 있습니다. 정확한 운영값과 Secret lifecycle은 v0.9.0 후속 운영 작업에서 확정합니다.
 
 임시 DB가 필요하면 Backend 실행 전에 PowerShell 세션에서 지정할 수 있습니다.
 
@@ -163,7 +176,7 @@ npm.cmd run build
 .\backend\.venv\Scripts\python.exe -m ruff check backend
 ```
 
-v0.4.6 통합 검증 결과:
+과거 v0.4.6 통합 검증 기록:
 
 - Frontend: 테스트 파일 8개, 테스트 105개 통과
 - Backend: 테스트 53개 통과
@@ -172,11 +185,21 @@ v0.4.6 통합 검증 결과:
 - Chrome에서 두 문서의 업로드·분석·전환과 네트워크 오류 재시도 검증
 - 320px, 375px, 576px, 768px viewport 검증
 
+현재 기준 확인 기록:
+
+- Backend: 635개 테스트 수집
+- Frontend: 110개 테스트 통과
+- v0.8.0 로컬 Docker/MySQL synthetic smoke: MySQL 8.4, Alembic head, API·worker, `/health`·`/ready` 확인
+
+위 수치는 해당 확인 시점의 기록이다. 이 문서 정합화 작업에서는 전체 테스트를 새로 실행하지 않았다.
+
 ## 현재 범위와 한계
 
-현재 분석 UI와 기존 조항 분석 흐름은 UTF-8 TXT 한 파일을 최대 1 MiB까지 처리합니다. Backend에는 텍스트 레이어 PDF를 최대 20 MiB·100페이지까지 직접 추출하는 별도 extraction resource가 추가됐지만, 결과는 사용자 검토 필요 상태에 머물며 아직 UI·조항 분리·분석과 연결되지 않습니다. 이미지 OCR, 스캔 PDF OCR, 실제 외부 Provider, 인증·인가, 사용자별 이력, 운영 DB와 배포는 구현하지 않았습니다. 분석은 작업 생성 요청 안에서 동기 실행되며 자동 폴링과 프로세스 재시작 후 복구를 지원하지 않습니다.
+현재 분석 UI의 직접 업로드 흐름은 UTF-8 TXT 한 파일을 최대 1 MiB까지 처리합니다. Backend extraction API에는 텍스트 PDF, 이미지 OCR과 스캔 PDF 처리·확인 흐름이 존재하지만 모든 형식이 동일한 Frontend 사용자 흐름으로 통합된 것은 아닙니다.
 
-업로드 파일 자체는 저장하지 않지만 분리된 조항 본문은 SQLite에 저장됩니다. 현재 인증과 사용자 격리가 없으므로 실제 계약서나 실제 개인정보를 입력하면 안 됩니다. Provider 전달 전 마스킹과 출력 검증은 규칙 기반 기술 검증이며 모든 개인정보나 위험 조항 탐지를 보장하지 않습니다.
+개발 기본 실행은 SQLite를 사용할 수 있습니다. production runtime은 SQLite를 거부하며 Compose는 MySQL 8.4, Alembic migration one-shot, API와 worker 분리를 사용합니다. 로컬 Docker/MySQL synthetic smoke는 완료됐지만 HTTPS/TLS와 trusted proxy, 외부 Secret 저장소, backup/restore 운영 절차, 외부 observability와 실제 배포 플랫폼은 아직 미완료 또는 미확정입니다.
+
+JWT 인증, 사용자별 ownership과 저장 암호화가 구현됐더라도 실제 계약서나 실제 개인정보 사용이 승인된 것은 아닙니다. 실제 외부 Provider adapter도 연결되지 않았습니다. Provider 전달 전 마스킹과 출력 검증은 규칙 기반 기술 검증이며 모든 개인정보나 위험 조항 탐지를 보장하지 않습니다. 별도 보안·개인정보 검토 전에는 명백한 합성 데이터만 사용합니다.
 
 ## 상세 문서
 

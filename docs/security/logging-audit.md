@@ -1,9 +1,9 @@
 # ContractCheck AI Logging and Audit
 
-- Status: Draft
+- Status: Historical design draft with implementation status update
 - Approval status: Review required / Not approved
 - Version: v0.2.2 PR-3
-- Implementation status: Not started
+- Implementation status: Operational structured logging partially implemented; audit/security event system not implemented
 - Provider selection: Not selected
 - External AI use approval: Not granted
 - Real contract use: Not approved
@@ -13,6 +13,33 @@
 This document is a design draft for review. It is not a final approved logging, audit, monitoring, or incident response policy. It does not approve implementation, real contract processing, real personal data processing, external AI use, external transfer, product operation, or production release. This document is not legal advice, privacy compliance certification, or an operational approval record.
 
 Concrete log retention periods, log collection systems, alert thresholds, roles, export procedures, and production operations require follow-up review and explicit user approval.
+
+## 현재 구현 상태 (v0.9.0 PR-1 기준)
+
+이 절은 역사적 설계 초안을 삭제하거나 승인 상태를 변경하지 않고 현재 코드와의 차이만 기록한다.
+
+### 부분 구현 — operational structured logging
+
+현재 `backend/app/core/logging.py`는 JSON structured event를 stdout/stderr logging 경계에 기록한다.
+
+- 공통 필드: timestamp, level, logger, event, service, status, request_id
+- 선택 필드: job_id, worker_id, attempt_count, duration_ms, safe_error_code
+- 현재 event: `http_request_completed`, `upload_rejected`, `upload_completed`, `extraction_rejected`, `temporary_cleanup_failed`, `rate_limit_exceeded`, `analysis_worker_started`, `analysis_worker_stopped`, `analysis_job_finished`, `analysis_job_failure`
+- 민감 extra key 차단: authorization, cookie, JWT/token, password/secret/API key, DB URL, ciphertext/nonce, encryption/HMAC key, request·response body, Provider request·response, clause body, evidence, summary, email, filename
+- 문자열 identifier는 허용 문자와 최대 길이로 정규화하며 worker 실패는 raw exception 대신 저장된 safe error code를 사용한다.
+
+관련 structured logging 테스트는 core field, 민감 extra key 비노출과 worker의 안전한 실패 로그를 검증한다. 이 구현은 L1 operational log의 일부이며 아래 설계의 L2 audit log나 L3 security event log 전체를 구현한 것으로 간주하지 않는다.
+
+### 미구현 또는 미확정
+
+- 인증 성공·실패, 권한 거부와 사용자 행위를 별도 audit/security event code로 기록하는 체계
+- audit/security event 전용 저장·전송·조회 경계
+- 로그 수집 제품, 외부 전송 승인과 body/header 수집 차단의 운영 검증
+- 로그 접근 권한, 조회 자체 감사, 무결성 또는 변경 방지 방식
+- 구체 보존 기간, 삭제·export 절차와 책임자
+- 지표, 경보 threshold, on-call과 incident response 연동
+
+현재 HTTP middleware가 401·403·404 상태를 operational request event로 기록할 수 있어도 이를 인증 실패 또는 권한 거부 감사 이벤트로 확대 해석하지 않는다. 이 상태 갱신은 production 또는 실제 계약서·개인정보 사용 승인을 의미하지 않는다.
 
 ## 1. 문서 목적
 
