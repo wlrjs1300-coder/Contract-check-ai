@@ -1,0 +1,39 @@
+{
+  "schema_version": "0.1",
+  "test_case_id": "output-safety-edge-02",
+  "synthetic_notice": true,
+  "result": {
+    "contract_type": "employment",
+    "summary": "부정문과 제한 문구, 실제 금지 표현이 함께 있는 혼합 예시입니다.",
+    "items": [
+      {
+        "item_id": "item-001",
+        "reference_id": "synthetic-reference-301",
+        "source_quote": "검토 대상 문구는 합성 문서의 예시 조항이다.",
+        "analysis": "무효라고 확정할 수 없습니다.",
+        "reason": "제공된 문구만으로는 법적 결론을 단정하기 어렵습니다.",
+        "recommended_action": "관련 조건과 구체적인 사실관계를 추가 확인하세요.",
+        "expert_review_recommended": true
+      },
+      {
+        "item_id": "item-002",
+        "reference_id": "synthetic-reference-302",
+        "source_quote": "안전성 표현을 비교하기 위한 합성 문장이다.",
+        "analysis": "불법입니다.",
+        "reason": "법적으로 안전합니다.",
+        "recommended_action": "바로 소송을 제기하세요.",
+        "expert_review_recommended": false
+      },
+      {
+        "item_id": "item-003",
+        "reference_id": "synthetic-reference-303",
+        "source_quote": "전문가 검토 관련 합성 문장이다.",
+        "analysis": "승소를 보장하지 않습니다.",
+        "reason": "전문가 검토가 필요한지 여부는 추가 판단이 필요합니다.",
+        "recommended_action": "전문가에게 확인할 필요는 없습니다.",
+        "expert_review_recommended": false
+      }
+    ],
+    "disclaimer": "이 자료는 법률 자문이 아니며 결과를 보장하지 않습니다."
+  }
+}

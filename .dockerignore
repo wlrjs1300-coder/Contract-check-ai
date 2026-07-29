@@ -1,0 +1,59 @@
+﻿# Runtime context only
+**/.git
+**/.gitignore
+**/.github
+**/.vscode
+**/.idea
+**/.pytest_cache
+**/.ruff_cache
+**/__pycache__
+**/.mypy_cache
+
+# Local databases and large local files
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+contract_check.db
+contract_check_legacy_local.db
+mysql-data/
+data/
+
+# Documents and private work directories
+CLAUDE.md
+AGENTS.md
+.codex/
+.claude/
+private-docs/
+private/
+raw-notes/
+local-contracts/
+temp/
+tmp/
+documents/
+contract/
+storage/
+uploads/
+reports/
+exports/
+
+# Environment/config secrets
+.env
+.env.*
+secrets/
+credentials/
+config/secrets.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Test fixtures outside source control context
+**/backend/tests/fixtures/*.txt
+
+# Generated artifacts
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+*.log

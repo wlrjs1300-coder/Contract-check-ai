@@ -1,0 +1,2195 @@
+from __future__ import annotations
+
+import os
+import re
+import logging
+from datetime import UTC, datetime
+import hashlib
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from backend.app.db.database import get_db
+from backend.app.core.auth import get_current_user
+from backend.app.core.boundary_config import get_boundary_config
+from backend.app.core.logging import log_event
+from backend.app.core.rate_limit import enforce_user_rate_limit
+from backend.app.db.models import Extraction, ExtractionPage
+from backend.app.db.models import User
+from backend.app.schemas.extractions import (
+    ExtractionErrorResponse,
+    ExtractionReviewPageResponse,
+    ExtractionReviewResponse,
+    ExtractionPageResponse,
+    ExtractionResponse,
+    ExtractionConfirmationResponse,
+    PageReviewPatchRequest,
+)
+from backend.app.services.image_ocr import (
+    MAX_IMAGE_COUNT,
+    MAX_IMAGE_FILE_BYTES,
+    MAX_REQUEST_SIZE_BYTES,
+    OCR_TIMEOUT_SECONDS,
+    ImageExtractionError,
+    OcrFailure,
+    OcrPageInput,
+    OcrPageResult,
+    OcrAdapter,
+    UnavailableOcrAdapter,
+    SyntheticOcrAdapter,
+    LocalKoreanOcrAdapter,
+    canonical_format_from_extension,
+    extract_images,
+    prepare_image,
+    validate_content_type,
+)
+from backend.app.services.extraction_temp_files import (
+    OriginalCleanupError,
+    RequestDirectory,
+    UploadSizeLimitExceededError,
+    cleanup_request_directory,
+    create_request_directory,
+    refresh_request_directory_lease,
+    create_server_file_path,
+    write_upload_to_temp,
+)
+from backend.app.services.pdf_extraction import (
+    MAX_PDF_SIZE_BYTES,
+    PDFExtractionError,
+    PDF_PAGE_CLASSIFICATION_DIRECT_USABLE,
+    PDF_PAGE_CLASSIFICATION_BLANK_CANDIDATE,
+    ExtractedPage,
+    MAX_PDF_RENDER_PIXELS,
+    MAX_RENDER_TIMEOUT_SECONDS as PDF_RENDER_TIMEOUT_SECONDS,
+    UnavailablePdfRenderer,
+    SyntheticPdfRenderer,
+    PdfPageRenderer,
+    PdfRenderRequest,
+    extract_text_pdf,
+)
+from backend.app.core.encryption_config import (
+    EncryptionKeyring,
+    get_encryption_keyring,
+)
+from backend.app.services.scalar_encryption import (
+    ScalarEncryptionError,
+    ScalarDecryptionError,
+    decrypt_extraction_page_text,
+    encrypt_extraction_page_text,
+)
+from backend.app.services.scalar_metadata_encryption import (
+    decrypt_extraction_filename_display,
+    encrypt_extraction_filename_display,
+)
+from backend.app.services.nested_json_encryption import (
+    decrypt_confirmation_snapshot,
+    decrypt_extraction_page_blocks,
+    encrypt_confirmation_snapshot,
+    encrypt_extraction_page_blocks,
+    read_extraction_page_text_field,
+    write_extraction_page_text_field,
+)
+
+
+MAX_PAGE_REVIEW_TEXT = 200_000
+MAX_DOCUMENT_REVIEW_TEXT = 1_000_000
+_DANGEROUS_INNER_SUFFIXES = {
+    ".bat", ".cmd", ".com", ".exe", ".html", ".js", ".ps1", ".py", ".sh",
+    ".tar", ".zip",
+}
+
+
+
+router = APIRouter(prefix="/extractions", tags=["extractions"])
+PDF_CONTENT_TYPES = {"application/pdf", "application/octet-stream", None, ""}
+ERROR_RESPONSES = {
+    400: {"model": ExtractionErrorResponse},
+    404: {"model": ExtractionErrorResponse},
+    413: {"model": ExtractionErrorResponse},
+    422: {"model": ExtractionErrorResponse},
+    500: {"model": ExtractionErrorResponse},
+    503: {"model": ExtractionErrorResponse},
+    504: {"model": ExtractionErrorResponse},
+}
+
+
+def _error_detail(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+) -> dict[str, object]:
+    return {
+        "code": code,
+        "message": message,
+        "retryable": retryable,
+    }
+
+
+def _image_error_detail(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+) -> dict[str, object]:
+    return {
+        **_error_detail(code, message, retryable=retryable),
+        "analysis_blocked": True,
+    }
+
+
+def _safe_filename_display(filename: str) -> str:
+    basename = filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    sanitized = re.sub(r"[\x00-\x1f\x7f]", "", basename).strip()
+    return (sanitized or "document.pdf")[:255]
+
+
+def _validate_pdf_filename(filename: str) -> None:
+    if (
+        not filename
+        or len(filename) > 255
+        or filename != filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+        or ".." in filename
+        or re.search(r"[\x00-\x1f\x7f]", filename)
+        or Path(filename).suffix.lower() != ".pdf"
+        or Path(Path(filename).stem).suffix.lower() in _DANGEROUS_INNER_SUFFIXES
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail=_error_detail(
+                "UNSUPPORTED_FILE_TYPE",
+                "Only PDF files are supported for text extraction.",
+            ),
+        )
+
+
+def _to_iso_timestamp(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC).isoformat()
+
+
+def _stable_checksum(values: list[str]) -> str:
+    hasher = hashlib.sha256()
+    for value in values:
+        hasher.update(value.encode("utf-8"))
+        hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
+def _extract_review_data(
+    extraction: Extraction,
+) -> dict[str, object]:
+    extraction_data = extraction.extra_data or {}
+    return {
+        "review_status": extraction_data.get("review_status", "pending"),
+        "review_version": extraction_data.get("review_version", 1),
+        "can_confirm": extraction_data.get("can_confirm", False),
+        "blocking_reasons": list(extraction_data.get("blocking_reasons", [])),
+        "confirmed_at": extraction_data.get("confirmed_at"),
+    }
+
+
+def _extract_page_review_data(
+    page: ExtractionPage,
+    page_text: str,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[str, object]:
+    page_data = page.extra_data or {}
+    reviewed_text = _read_page_text_field(
+        page_data,
+        field_name="reviewed_text",
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    final_text = _read_page_text_field(
+        page_data,
+        field_name="final_text",
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    return {
+        "review_status": page_data.get("review_status", "pending"),
+        "review_version": page_data.get("review_version", 1),
+        "reviewed_text": reviewed_text,
+        "text_changed": bool(page_data.get("text_changed", False)),
+        "reviewed_at": page_data.get("reviewed_at"),
+        "confirmed_at": page_data.get("confirmed_at"),
+        "final_text": final_text,
+        "final_text_preview": (final_text or page_text)[:80],
+    }
+
+
+def _get_extraction_page_text(
+    page: ExtractionPage,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> str:
+    if not page.text_encrypted:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "The extraction page text is not available.",
+            ),
+        )
+
+    try:
+        return decrypt_extraction_page_text(
+            page.text_encrypted,
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "The extraction page text could not be decrypted.",
+            ),
+        ) from exc
+
+
+def _encrypt_page_text(
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    text: str,
+    keyring: EncryptionKeyring,
+) -> str:
+    try:
+        return encrypt_extraction_page_text(
+            text,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "Failed to protect extraction page text.",
+            ),
+        ) from exc
+
+
+def _read_page_text_field(
+    page_data: dict[str, object],
+    *,
+    field_name: str,
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> str | None:
+    try:
+        return read_extraction_page_text_field(
+            page_data,
+            field_name=field_name,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                f"The {field_name} could not be decrypted.",
+            ),
+        ) from exc
+
+
+def _write_page_text_field(
+    page_data: dict[str, object],
+    *,
+    field_name: str,
+    value: str | None,
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[str, object]:
+    try:
+        return write_extraction_page_text_field(
+            page_data,
+            field_name=field_name,
+            value=value,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                f"Failed to protect {field_name}.",
+            ),
+        ) from exc
+
+
+def _decrypt_page_blocks(
+    blocks: list[dict[str, object]],
+    *,
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    try:
+        return decrypt_extraction_page_blocks(
+            blocks,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "The page blocks could not be decrypted.",
+            ),
+        ) from exc
+
+
+def _encrypt_page_blocks(
+    blocks: list[dict[str, object]],
+    *,
+    extraction_id: str,
+    page_number: int,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    try:
+        return encrypt_extraction_page_blocks(
+            blocks,
+            extraction_id=extraction_id,
+            page_number=page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "Failed to protect page blocks.",
+            ),
+        ) from exc
+
+
+def _encrypt_snapshot(
+    snapshot: list[dict[str, object]],
+    *,
+    extraction_id: str,
+    owner_id: str,
+    snapshot_version: int,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    try:
+        return encrypt_confirmation_snapshot(
+            snapshot,
+            extraction_id=extraction_id,
+            owner_id=owner_id,
+            snapshot_version=snapshot_version,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "Failed to protect the confirmation snapshot.",
+            ),
+        ) from exc
+
+
+def _decrypt_snapshot(
+    stored_snapshot: list[dict[str, object]],
+    *,
+    extraction_id: str,
+    owner_id: str,
+    snapshot_version: int | None,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    try:
+        return decrypt_confirmation_snapshot(
+            stored_snapshot,
+            extraction_id=extraction_id,
+            owner_id=owner_id,
+            snapshot_version=snapshot_version,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encryption_failed",
+                "The confirmation snapshot could not be decrypted.",
+            ),
+        ) from exc
+
+
+def _build_review_summary(
+    extraction: Extraction,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[str, int | bool | list[str] | str]:
+    pages = extraction.pages
+    required_pages = 0
+    reviewed = 0
+    edited = 0
+    failed = 0
+    blocked = False
+    blocking_reasons: list[str] = []
+
+    for page in pages:
+        page_review_data = _extract_page_review_data(
+            page,
+            page_text=_get_extraction_page_text(page, owner_id=owner_id, keyring=keyring),
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        is_required = page.requires_user_review
+        page_status = page_review_data["review_status"]
+        if page_data := page.extra_data:
+            if page_data.get("analysis_blocked") is True:
+                blocked = True
+                blocked_reason = page_data.get("failure")
+                if blocked_reason and blocked_reason not in blocking_reasons:
+                    blocking_reasons.append(blocked_reason)
+        if is_required:
+            required_pages += 1
+            if page_status in {"reviewed", "edited"}:
+                reviewed += 1
+            elif page_status == "pending":
+                pass
+        if page_status == "edited":
+            edited += 1
+        if (page_data or {}).get("failure"):
+            failed += 1
+
+    if required_pages == 0:
+        extraction_review_status = "not_required"
+    elif extraction.requires_user_review and failed > 0:
+        if "extraction_has_failed_pages" not in blocking_reasons:
+            blocking_reasons.append("extraction_has_failed_pages")
+
+    if extraction.status == "confirmed":
+        extraction_review_status = "confirmed"
+    elif required_pages == 0:
+        extraction_review_status = "not_required"
+    elif reviewed == 0:
+        extraction_review_status = "pending"
+    elif reviewed < required_pages:
+        extraction_review_status = "partially_reviewed"
+    else:
+        extraction_review_status = "ready_to_confirm"
+
+    return {
+        "required_pages": required_pages,
+        "reviewed_pages": reviewed,
+        "edited_pages": edited,
+        "failed_pages": failed,
+        "blocked": blocked,
+        "blocking_reasons": blocking_reasons,
+        "extraction_review_status": extraction_review_status,
+    }
+
+
+class _LeaseRefreshError(RuntimeError):
+    """임시 저장소 Lease 갱신 실패."""
+
+
+def _refresh_lease_or_fail(request_directory: RequestDirectory) -> RequestDirectory:
+    try:
+        return refresh_request_directory_lease(request_directory)
+    except OriginalCleanupError as exc:
+        raise _LeaseRefreshError from exc
+
+
+def _serialize_extraction(
+    extraction: Extraction,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> ExtractionResponse:
+    pages = sorted(extraction.pages, key=lambda page: page.page_number)
+    extraction_data = extraction.extra_data or {}
+    summary = _build_review_summary(extraction, owner_id=owner_id, keyring=keyring)
+    extraction_review_status = summary["extraction_review_status"]
+    review_metadata = _extract_review_data(extraction)
+
+    page_responses: list[ExtractionPageResponse] = []
+    for page in pages:
+        page_text = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+        page_review_data = _extract_page_review_data(
+            page,
+            page_text=page_text,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        page_blocks = _decrypt_page_blocks(
+            (page.extra_data or {}).get("blocks", []),
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        page_responses.append(
+            ExtractionPageResponse(
+                page_number=page.page_number,
+                extraction_method=page.method,
+                text=page_text,
+                text_length=len(page_text),
+                page_id=(page.extra_data or {}).get("page_id"),
+                source_format=(page.extra_data or {}).get("source_format"),
+                normalized_width=(page.extra_data or {}).get("normalized_width"),
+                normalized_height=(page.extra_data or {}).get("normalized_height"),
+                blocks=page_blocks,
+                warnings=page.warnings,
+                requires_user_review=page.requires_user_review,
+                review_required=page.requires_user_review,
+                analysis_blocked=(page.extra_data or {}).get(
+                    "analysis_blocked",
+                    True,
+                ),
+                review_status=page_review_data["review_status"],
+                review_version=page_review_data["review_version"],
+                reviewed_text=page_review_data["reviewed_text"],
+                text_changed=page_review_data["text_changed"],
+                reviewed_at=page_review_data["reviewed_at"],
+                final_text_preview=page_review_data["final_text_preview"],
+                failure=(page.extra_data or {}).get("failure"),
+            )
+        )
+
+    try:
+        filename_display = decrypt_extraction_filename_display(
+            extraction.filename_display_encrypted,
+            record_id=extraction.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "encrypted_data_unavailable",
+                "Stored encrypted data is unavailable.",
+            ),
+        ) from exc
+    if not isinstance(filename_display, str):
+        raise HTTPException(status_code=500, detail="Stored encrypted data is unavailable.")
+
+    return ExtractionResponse(
+        extraction_id=extraction.id,
+        filename_display=filename_display,
+        source_type=extraction.source_type,
+        size_bytes=extraction.size_bytes,
+        page_count=extraction.page_count,
+        total_pages=extraction.page_count,
+        completed_pages=extraction_data.get("completed_pages", len(pages)),
+        failed_pages=extraction_data.get("failed_pages", 0),
+        total_text_length=extraction_data.get(
+            "total_text_length",
+            sum(
+                len(_get_extraction_page_text(page, owner_id=owner_id, keyring=keyring))
+                for page in pages
+            ),
+        ),
+        extraction_status=extraction.status,
+        extraction_method=extraction.method,
+        pages=page_responses,
+        warnings=extraction.warnings,
+        requires_user_review=extraction.requires_user_review,
+        review_required=extraction.requires_user_review,
+        analysis_blocked=extraction_data.get("analysis_blocked", True),
+        review_status=extraction_review_status,
+        review_version=review_metadata["review_version"],
+        can_confirm=review_metadata["can_confirm"],
+        reviewed_pages=summary["reviewed_pages"],
+        edited_pages=summary["edited_pages"],
+        required_review_pages=summary["required_pages"],
+        blocking_reasons=summary["blocking_reasons"],
+        confirmed_at=review_metadata["confirmed_at"],
+        final_text_length=extraction_data.get(
+            "final_total_text_length",
+            extraction_data.get("total_text_length", 0),
+        ),
+        created_at=extraction.created_at,
+        updated_at=extraction.created_at,
+    )
+
+
+def _get_extraction_with_pages(
+    extraction_id: str,
+    db: Session,
+    current_user: User,
+) -> Extraction:
+    statement = (
+        select(Extraction)
+        .options(selectinload(Extraction.pages))
+        .where(
+            Extraction.id == extraction_id,
+            Extraction.owner_id == current_user.id,
+        )
+    )
+    extraction = db.scalar(statement)
+
+    if extraction is None:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "extraction_not_found",
+                "The extraction was not found.",
+            ),
+        )
+
+    return extraction
+
+
+def _parse_version_value(
+    if_match: str | None,
+    payload_version: int | None,
+    *,
+    fallback_error_code: str = "invalid_if_match",
+) -> int:
+    if payload_version is not None:
+        return payload_version
+
+    if if_match is None:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                fallback_error_code,
+                "A matching version is required.",
+            ),
+        )
+
+    version_token = if_match.strip()
+    if version_token.startswith("W/"):
+        version_token = version_token[2:]
+    if version_token.startswith('"') and version_token.endswith('"'):
+        version_token = version_token[1:-1]
+
+    try:
+        return int(version_token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                fallback_error_code,
+                "The version header could not be parsed.",
+            ),
+        ) from exc
+
+
+def get_ocr_adapter() -> OcrAdapter:
+    app_env = (os.getenv("APP_ENV") or "production").lower().strip()
+    adapter_mode = (os.getenv("OCR_ADAPTER") or "").strip().lower()
+
+    if app_env == "test":
+        if adapter_mode in {"local", "local_korean", "tesseract"}:
+            return LocalKoreanOcrAdapter()
+        return SyntheticOcrAdapter()
+
+    if app_env in {"production", "development"} and adapter_mode in {
+        "",
+        "local",
+        "local_korean",
+        "tesseract",
+    }:
+        try:
+            return LocalKoreanOcrAdapter()
+        except OcrFailure:
+            return UnavailableOcrAdapter()
+    if adapter_mode == "synthetic":
+        raise RuntimeError(
+            "Synthetic OCR adapter is test-only and cannot be used in non-test environment."
+        )
+    return UnavailableOcrAdapter()
+
+
+def get_pdf_renderer() -> PdfPageRenderer:
+    if os.getenv("APP_ENV") == "test":
+        return SyntheticPdfRenderer()
+    return UnavailablePdfRenderer()
+
+
+def _run_pdf_ocr_with_timeout(
+    adapter: OcrAdapter,
+    page: OcrPageInput,
+    *,
+    timeout_seconds: float,
+) -> OcrPageResult:
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr-page")
+    future = executor.submit(adapter.recognize, page)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeoutError as exc:
+        raise ImageExtractionError(
+            "pdf_page_render_timeout",
+            "The PDF page text extraction timed out.",
+            status_code=504,
+            retryable=True,
+        ) from exc
+    except OcrFailure as exc:
+        code = exc.code if exc.code == "ocr_unavailable" else "ocr_failed"
+        raise ImageExtractionError(
+            code,
+            "The PDF page text extraction could not be completed.",
+            status_code=503 if code == "ocr_unavailable" else 500,
+            retryable=True,
+        ) from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _process_pdf_pages(
+    pdf_pages: tuple[ExtractedPage, ...],
+    source_path: Path,
+    request_directory: RequestDirectory,
+    ocr_adapter: OcrAdapter,
+    pdf_renderer: PdfPageRenderer,
+) -> tuple[list[dict[str, object]], dict[str, int], tuple[str, ...], bool]:
+    processed_pages: list[dict[str, object]] = []
+    completed_pages = 0
+    failed_pages = 0
+    direct_pages = 0
+    ocr_pages = 0
+    review_required_pages = 0
+    total_text_length = 0
+    document_analysis_blocked = False
+
+    for page in pdf_pages:
+        page_review_required = bool(page.review_required)
+        page_classification = page.classification
+        page_method = "direct"
+        page_failure: str | None = None
+        page_warning_list = list(page.warnings)
+        page_blocks: list[dict[str, object]] = []
+        source_format = None
+        normalized_width: int | None = None
+        normalized_height: int | None = None
+        page_text = page.text
+        count_as_completed = bool(page_text.strip())
+
+        if page.classification != PDF_PAGE_CLASSIFICATION_DIRECT_USABLE:
+            page_review_required = True
+            should_ocr = True
+            request_directory = _refresh_lease_or_fail(request_directory)
+
+            if should_ocr:
+                try:
+                    render_request = PdfRenderRequest(
+                        request_directory=request_directory,
+                        source_path=source_path,
+                        page_number=page.page_number,
+                        page_id=page.page_id,
+                    )
+                    rendered = pdf_renderer.render(render_request)
+                    if (
+                        rendered.page_number != page.page_number
+                        or rendered.page_id != page.page_id
+                    ):
+                        raise ImageExtractionError(
+                            "pdf_page_render_failed",
+                            "The PDF page rendering returned a mismatched page identity.",
+                            status_code=500,
+                        )
+                    if rendered.pixel_count > MAX_PDF_RENDER_PIXELS:
+                        raise ImageExtractionError(
+                            "pdf_render_limit_exceeded",
+                            "The PDF page was too large to render.",
+                            status_code=422,
+                            retryable=True,
+                        )
+
+                    ocr_result = _run_pdf_ocr_with_timeout(
+                        ocr_adapter,
+                        OcrPageInput(
+                            page_number=page.page_number,
+                            page_id=page.page_id,
+                            image_bytes=rendered.image_bytes,
+                            width=rendered.width,
+                            height=rendered.height,
+                        ),
+                        timeout_seconds=min(
+                            OCR_TIMEOUT_SECONDS,
+                            PDF_RENDER_TIMEOUT_SECONDS,
+                        ),
+                    )
+                    if not ocr_result.text.strip():
+                        raise ImageExtractionError(
+                            "empty_ocr_result",
+                            "No text could be extracted from an image.",
+                            status_code=422,
+                        )
+                    page_warning_list.extend(ocr_result.warnings)
+
+                    for expected_index, block in enumerate(ocr_result.blocks):
+                        if block.block_index != expected_index or block.reading_order != expected_index:
+                            raise ImageExtractionError(
+                                "ocr_result_block_order_mismatch",
+                                "The PDF page OCR result block order is invalid.",
+                                status_code=500,
+                            )
+
+                        page_blocks.append(
+                            {
+                                "block_index": block.block_index,
+                                "text": block.text,
+                                "confidence": block.confidence,
+                                "bbox": block.bbox,
+                                "reading_order": block.reading_order,
+                            }
+                        )
+
+                    page_method = "ocr"
+                    page_text = ocr_result.text
+                    source_format = "png"
+                    normalized_width = rendered.normalized_width
+                    normalized_height = rendered.normalized_height
+                    count_as_completed = bool(page_text.strip())
+
+                    if ocr_result.confidence is None:
+                        page_warning_list.append("ocr_confidence_unavailable")
+                    elif ocr_result.confidence < 0.8:
+                        page_warning_list.append("ocr_confidence_low")
+                except PDFExtractionError as exc:
+                    page_failure = exc.code
+                    page_warning_list.append(exc.code)
+                except ImageExtractionError as exc:
+                    page_failure = exc.code
+                    page_warning_list.append(exc.code)
+
+        if count_as_completed:
+            completed_pages += 1
+            total_text_length += len(page_text)
+            if page_method == "ocr":
+                ocr_pages += 1
+            else:
+                direct_pages += 1
+
+        if page_failure is not None:
+            failed_pages += 1
+            document_analysis_blocked = True
+
+        if page_review_required:
+            review_required_pages += 1
+            document_analysis_blocked = True
+
+        if page.classification == PDF_PAGE_CLASSIFICATION_BLANK_CANDIDATE:
+            page_warning_list.append("empty_page_text")
+
+        processed_pages.append(
+            {
+                "page_number": page.page_number,
+                "classification": page_classification,
+                "method": page_method,
+                "text": page_text,
+                "warnings": list(dict.fromkeys(page_warning_list)),
+                "analysis_blocked": bool(page_failure is not None or page_review_required),
+                "failure": page_failure,
+                "page_id": page.page_id,
+                "requires_user_review": page_review_required,
+                "source_format": source_format,
+                "normalized_width": normalized_width,
+                "normalized_height": normalized_height,
+                "blocks": page_blocks,
+            }
+        )
+
+    summary = {
+        "completed_pages": completed_pages,
+        "failed_pages": failed_pages,
+        "direct_pages": direct_pages,
+        "ocr_pages": ocr_pages,
+        "review_required_pages": review_required_pages,
+        "total_text_length": total_text_length,
+    }
+
+    if completed_pages == 0:
+        document_analysis_blocked = True
+
+    return (
+        processed_pages,
+        summary,
+        (),
+        document_analysis_blocked,
+    )
+
+
+@router.post(
+    "",
+    response_model=ExtractionResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=ERROR_RESPONSES,
+    dependencies=[Depends(enforce_user_rate_limit("extraction"))],
+)
+async def create_extraction(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ocr_adapter: OcrAdapter = Depends(get_ocr_adapter),
+    pdf_renderer: PdfPageRenderer = Depends(get_pdf_renderer),
+) -> ExtractionResponse:
+    filename = file.filename or ""
+
+    _validate_pdf_filename(filename)
+
+    if file.content_type not in PDF_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=_error_detail(
+                "UNSUPPORTED_FILE_TYPE",
+                "The uploaded file does not match the PDF format.",
+            ),
+        )
+
+    request_directory: RequestDirectory | None = None
+    source_path: Path | None = None
+    extracted_pdf = None
+    size_bytes = 0
+    pending_error: HTTPException | None = None
+    processed_pages: list[dict[str, object]] = []
+    extraction_summary: dict[str, int] = {}
+
+    try:
+        request_directory = create_request_directory()
+        source_path = create_server_file_path(request_directory)
+        boundary_config = get_boundary_config()
+        size_bytes = await write_upload_to_temp(
+            file,
+            source_path,
+            max_size_bytes=min(MAX_PDF_SIZE_BYTES, boundary_config.max_upload_bytes),
+        )
+        request_directory = _refresh_lease_or_fail(request_directory)
+
+        if size_bytes == 0:
+            raise PDFExtractionError(
+                "empty_document",
+                "The uploaded PDF file is empty.",
+            )
+
+        extracted_pdf = extract_text_pdf(source_path)
+        processed_pages, extraction_summary, _, _ = (
+            _process_pdf_pages(
+                tuple(extracted_pdf.pages),
+                source_path,
+                request_directory,
+                ocr_adapter,
+                pdf_renderer,
+            )
+        )
+        if len(processed_pages) > boundary_config.max_document_pages:
+            raise PDFExtractionError(
+                "EXTRACTION_LIMIT_EXCEEDED",
+                "The document exceeds the extraction page limit.",
+                status_code=413,
+            )
+        extracted_characters = sum(
+            len(str(page.get("text", ""))) for page in processed_pages
+        )
+        if extracted_characters > boundary_config.max_extracted_characters:
+            raise PDFExtractionError(
+                "EXTRACTION_LIMIT_EXCEEDED",
+                "The document exceeds the extraction text limit.",
+                status_code=413,
+            )
+        if (
+            not any(str(page.get("text", "")).strip() for page in processed_pages)
+            and extraction_summary.get("failed_pages", 0) == 0
+        ):
+            raise PDFExtractionError(
+                "MALFORMED_DOCUMENT",
+                "No usable text could be extracted from the document.",
+                status_code=422,
+            )
+    except UploadSizeLimitExceededError:
+        pending_error = HTTPException(
+            status_code=413,
+            detail=_error_detail(
+                "UPLOAD_TOO_LARGE",
+                "The uploaded file is too large.",
+            ),
+        )
+    except PDFExtractionError as exc:
+        pending_error = HTTPException(
+            status_code=exc.status_code,
+            detail=_error_detail(
+                exc.code,
+                exc.message,
+                retryable=exc.retryable,
+            ),
+        )
+    except OriginalCleanupError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "original_cleanup_failed",
+                "The uploaded file could not be safely removed.",
+            ),
+        ) from exc
+    except _LeaseRefreshError:
+        pending_error = HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "temporary_storage_unavailable",
+                "Temporary storage lease renewal failed.",
+                retryable=True,
+            ),
+        )
+    except (OSError, RuntimeError):
+        pending_error = HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "temporary_storage_unavailable",
+                "Temporary document storage is unavailable.",
+                retryable=True,
+            ),
+        )
+
+    if request_directory is not None:
+        try:
+            cleanup_request_directory(request_directory)
+        except OriginalCleanupError as exc:
+            log_event(
+                logger=logging.getLogger("api"),
+                event="temporary_cleanup_failed",
+                service="api",
+                status=500,
+                request_id=getattr(request.state, "request_id", None),
+                safe_error_code="TEMPORARY_STORAGE_ERROR",
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=_error_detail(
+                    "original_cleanup_failed",
+                    "The uploaded file could not be safely removed.",
+                ),
+            ) from exc
+
+    if pending_error is not None:
+        error_code = (
+            pending_error.detail.get("code", "MALFORMED_DOCUMENT")
+            if isinstance(pending_error.detail, dict)
+            else "MALFORMED_DOCUMENT"
+        )
+        log_event(
+            logger=logging.getLogger("api"),
+            event="extraction_rejected",
+            service="api",
+            status=pending_error.status_code,
+            request_id=getattr(request.state, "request_id", None),
+            safe_error_code=str(error_code),
+            extra={"file_size": size_bytes, "content_type_category": "pdf"},
+        )
+        raise pending_error
+
+    if extracted_pdf is None:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "extraction_failed",
+                "The PDF extraction could not be completed.",
+                retryable=True,
+            ),
+        )
+
+    if not processed_pages:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "extraction_failed",
+                "The PDF extraction could not be completed.",
+                retryable=True,
+            ),
+        )
+
+    extraction_method = "direct"
+    if extraction_summary.get("ocr_pages", 0) > 0:
+        extraction_method = "ocr" if extraction_summary.get("direct_pages") == 0 else "mixed"
+    requires_user_review = extraction_summary.get("review_required_pages", 0) > 0
+
+    extraction_id = str(uuid4())
+    filename_display = _safe_filename_display(filename)
+    extraction = Extraction(
+        id=extraction_id,
+        owner_id=current_user.id,
+        filename_display_encrypted=encrypt_extraction_filename_display(
+            filename_display,
+            record_id=extraction_id,
+            owner_id=current_user.id,
+            keyring=get_encryption_keyring(),
+        ),
+        source_type="pdf",
+        size_bytes=size_bytes,
+        page_count=len(processed_pages),
+        status="review_required",
+        method=extraction_method,
+        warnings=list(extracted_pdf.warnings),
+        requires_user_review=requires_user_review,
+        extra_data={
+            **extraction_summary,
+            "analysis_blocked": requires_user_review or extraction_summary.get(
+                "failed_pages",
+                0,
+            )
+            > 0,
+            "review_required": requires_user_review,
+            "review_status": "confirmed" if not requires_user_review else "pending",
+            "review_version": 1,
+            "can_confirm": (
+                extraction_summary.get("failed_pages", 0) == 0
+                and requires_user_review is False
+            ),
+            "blocking_reasons": [],
+        },
+    )
+    extraction_keyring = get_encryption_keyring()
+    for page in processed_pages:
+        page_text = page["text"]
+        text_encrypted = _encrypt_page_text(
+            extraction.id,
+            page["page_number"],
+            current_user.id,
+            page_text,
+            extraction_keyring,
+        )
+        encrypted_blocks = _encrypt_page_blocks(
+            page["blocks"],
+            extraction_id=extraction.id,
+            page_number=page["page_number"],
+            owner_id=current_user.id,
+            keyring=extraction_keyring,
+        )
+        extraction.pages.append(
+            ExtractionPage(
+                page_number=page["page_number"],
+                method=page["method"],
+                text_encrypted=text_encrypted,
+                warnings=page["warnings"],
+                requires_user_review=page["requires_user_review"],
+                extra_data={
+                    "page_id": page["page_id"],
+                    "source_format": page["source_format"],
+                    "normalized_width": page["normalized_width"],
+                    "normalized_height": page["normalized_height"],
+                    "analysis_blocked": page["analysis_blocked"],
+                    "failure": page["failure"],
+                    "blocks": encrypted_blocks,
+                    "classification": page["classification"],
+                    "review_status": "not_required"
+                    if not page["requires_user_review"]
+                    else "pending",
+                    "review_version": 1,
+                    "reviewed_text_encrypted": None,
+                    "text_changed": False,
+                    "confirmed_at": None,
+                    "reviewed_at": None,
+                    "final_text_encrypted": None,
+                },
+            )
+        )
+    db.add(extraction)
+    db.commit()
+    db.refresh(extraction)
+    return _serialize_extraction(extraction, owner_id=current_user.id, keyring=extraction_keyring)
+
+
+@router.post(
+    "/images",
+    response_model=ExtractionResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=ERROR_RESPONSES,
+)
+async def create_image_extraction(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ocr_adapter: OcrAdapter = Depends(get_ocr_adapter),
+) -> ExtractionResponse:
+    if not files or len(files) > MAX_IMAGE_COUNT:
+        raise HTTPException(
+            status_code=413,
+            detail=_image_error_detail(
+                "request_image_count_exceeded",
+                f"A request may contain at most {MAX_IMAGE_COUNT} images.",
+            ),
+        )
+
+    expected_formats: list[str] = []
+    for upload in files:
+        try:
+            expected_format = canonical_format_from_extension(upload.filename or "")
+            validate_content_type(upload.content_type, expected_format)
+        except ImageExtractionError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=_image_error_detail(
+                    exc.code,
+                    exc.message,
+                    retryable=exc.retryable,
+                ),
+            ) from exc
+        expected_formats.append(expected_format)
+
+    request_directory: RequestDirectory | None = None
+    extracted_images = None
+    total_size_bytes = 0
+    pending_error: HTTPException | None = None
+
+    try:
+        request_directory = create_request_directory()
+        source_paths: list[Path] = []
+        for upload, expected_format in zip(files, expected_formats, strict=True):
+            source_path = create_server_file_path(
+                request_directory,
+                suffix=f".{expected_format}",
+            )
+            try:
+                size_bytes = await write_upload_to_temp(
+                    upload,
+                    source_path,
+                    max_size_bytes=MAX_IMAGE_FILE_BYTES,
+                )
+            except UploadSizeLimitExceededError as exc:
+                raise ImageExtractionError(
+                    "image_too_large",
+                    "An image exceeds the allowed file size.",
+                    status_code=413,
+                ) from exc
+            if size_bytes == 0:
+                raise ImageExtractionError(
+                    "invalid_image_signature",
+                    "An uploaded image is empty.",
+                )
+            total_size_bytes += size_bytes
+            if total_size_bytes > MAX_REQUEST_SIZE_BYTES:
+                raise ImageExtractionError(
+                    "request_total_size_exceeded",
+                    "The request exceeds the allowed total file size.",
+                    status_code=413,
+                )
+            source_paths.append(source_path)
+            request_directory = _refresh_lease_or_fail(request_directory)
+
+        prepared_images = [
+            prepare_image(
+                path,
+                expected_format=expected_format,
+                page_number=index,
+            )
+            for index, (path, expected_format) in enumerate(
+                zip(source_paths, expected_formats, strict=True),
+                start=1,
+            )
+        ]
+        request_directory = _refresh_lease_or_fail(request_directory)
+        extracted_images = extract_images(prepared_images, ocr_adapter)
+    except ImageExtractionError as exc:
+        pending_error = HTTPException(
+            status_code=exc.status_code,
+            detail=_image_error_detail(
+                exc.code,
+                exc.message,
+                retryable=exc.retryable,
+            ),
+        )
+    except OriginalCleanupError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_image_error_detail(
+                "original_cleanup_failed",
+                "The uploaded files could not be safely removed.",
+            ),
+        ) from exc
+    except _LeaseRefreshError:
+        pending_error = HTTPException(
+            status_code=500,
+            detail=_image_error_detail(
+                "temporary_storage_unavailable",
+                "Temporary storage lease renewal failed.",
+                retryable=True,
+            ),
+        )
+    except (OSError, RuntimeError, ValueError):
+        pending_error = HTTPException(
+            status_code=500,
+            detail=_image_error_detail(
+                "temporary_storage_unavailable",
+                "Temporary document storage is unavailable.",
+                retryable=True,
+            ),
+        )
+
+    if request_directory is not None:
+        try:
+            cleanup_request_directory(request_directory)
+        except OriginalCleanupError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=_image_error_detail(
+                    "original_cleanup_failed",
+                    "The uploaded files could not be safely removed.",
+                ),
+            ) from exc
+
+    if pending_error is not None:
+        raise pending_error
+    if extracted_images is None:
+        raise HTTPException(
+            status_code=500,
+            detail=_image_error_detail(
+                "ocr_failed",
+                "The image text extraction could not be completed.",
+                retryable=True,
+            ),
+        )
+
+    extraction_id = str(uuid4())
+    filename_display = "image-upload"
+    extraction = Extraction(
+        id=extraction_id,
+        owner_id=current_user.id,
+        filename_display_encrypted=encrypt_extraction_filename_display(
+            filename_display,
+            record_id=extraction_id,
+            owner_id=current_user.id,
+            keyring=get_encryption_keyring(),
+        ),
+        source_type="image",
+        size_bytes=total_size_bytes,
+        page_count=len(extracted_images.pages),
+        status="review_required",
+        method="ocr",
+        warnings=list(extracted_images.warnings),
+        requires_user_review=extracted_images.review_required,
+        extra_data={
+            "completed_pages": len(extracted_images.pages),
+            "failed_pages": 0,
+            "total_text_length": extracted_images.total_text_length,
+            "analysis_blocked": extracted_images.analysis_blocked,
+            "review_required": extracted_images.review_required,
+            "review_status": "pending" if extracted_images.review_required else "not_required",
+            "review_version": 1,
+            "can_confirm": (
+                extracted_images.review_required is False
+                and extracted_images.analysis_blocked is False
+            ),
+            "blocking_reasons": [],
+        },
+    )
+    extraction_keyring = get_encryption_keyring()
+    for page in extracted_images.pages:
+        page_text = page.text
+        text_encrypted = _encrypt_page_text(
+            extraction.id,
+            page.page_number,
+            current_user.id,
+            page_text,
+            extraction_keyring,
+        )
+        encrypted_blocks = _encrypt_page_blocks(
+            [
+                {
+                    "block_index": block.block_index,
+                    "text": block.text,
+                    "confidence": block.confidence,
+                    "bbox": block.bbox,
+                    "reading_order": block.reading_order,
+                }
+                for block in page.blocks
+            ],
+            extraction_id=extraction.id,
+            page_number=page.page_number,
+            owner_id=current_user.id,
+            keyring=extraction_keyring,
+        )
+        extraction.pages.append(
+            ExtractionPage(
+                page_number=page.page_number,
+                method="ocr",
+                text_encrypted=text_encrypted,
+                warnings=list(page.warnings),
+                requires_user_review=page.review_required,
+                extra_data={
+                    "page_id": page.page_id,
+                    "source_format": next(
+                        prepared.canonical_format
+                        for prepared in prepared_images
+                        if prepared.page_number == page.page_number
+                    ),
+                    "normalized_width": page.normalized_width,
+                    "normalized_height": page.normalized_height,
+                    "analysis_blocked": page.analysis_blocked,
+                    "failure": None,
+                    "blocks": encrypted_blocks,
+                    "review_status": "not_required"
+                    if not page.review_required
+                    else "pending",
+                    "review_version": 1,
+                    "reviewed_text_encrypted": None,
+                    "text_changed": False,
+                    "reviewed_at": None,
+                    "confirmed_at": None,
+                    "final_text_encrypted": None,
+                },
+            )
+        )
+    db.add(extraction)
+    db.commit()
+    db.refresh(extraction)
+    return _serialize_extraction(extraction, owner_id=current_user.id, keyring=extraction_keyring)
+
+
+@router.get(
+    "/{extraction_id}",
+    response_model=ExtractionResponse,
+    responses=ERROR_RESPONSES,
+)
+def get_extraction(
+    extraction_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ExtractionResponse:
+    extraction = _get_extraction_with_pages(
+        extraction_id=extraction_id,
+        db=db,
+        current_user=current_user,
+    )
+    keyring = get_encryption_keyring()
+    return _serialize_extraction(extraction, owner_id=current_user.id, keyring=keyring)
+
+
+@router.get(
+    "/{extraction_id}/review",
+    response_model=ExtractionReviewResponse,
+    responses=ERROR_RESPONSES,
+)
+def get_extraction_review(
+    extraction_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ExtractionReviewResponse:
+    extraction = _get_extraction_with_pages(
+        extraction_id=extraction_id,
+        db=db,
+        current_user=current_user,
+    )
+    keyring = get_encryption_keyring()
+    owner_id = current_user.id
+    summary = _build_review_summary(extraction, owner_id=owner_id, keyring=keyring)
+    extraction_data = extraction.extra_data or {}
+
+    review_pages: list[ExtractionReviewPageResponse] = []
+    for page in sorted(extraction.pages, key=lambda item: item.page_number):
+        page_text = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+        page_data = _extract_page_review_data(
+            page,
+            page_text=page_text,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        page_extra = page.extra_data or {}
+        page_blocks = _decrypt_page_blocks(
+            page_extra.get("blocks", []),
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        review_pages.append(
+            ExtractionReviewPageResponse(
+                page_id=str(page_extra.get("page_id", page.page_number)),
+                page_number=page.page_number,
+                method=page.method,
+                classification=page_extra.get("classification"),
+                original_text=page_text,
+                reviewed_text=page_data["reviewed_text"],
+                final_text_preview=page_data["final_text_preview"],
+                text_changed=bool(page_data["text_changed"]),
+                review_status=page_data["review_status"],
+                review_version=page_data["review_version"],
+                reviewed_at=page_data["reviewed_at"],
+                confirmed_at=page_data["confirmed_at"],
+                warnings=page.warnings,
+                blocks=page_blocks,
+                failure=page_extra.get("failure"),
+                analysis_blocked=bool(page_extra.get("analysis_blocked", True)),
+            )
+        )
+
+    return ExtractionReviewResponse(
+        extraction_id=extraction.id,
+        review_status=summary["extraction_review_status"],
+        review_version=int(extraction_data.get("review_version", 1)),
+        review_required=extraction.requires_user_review,
+        can_confirm=_build_can_confirm(extraction, summary, owner_id=owner_id, keyring=keyring),
+        review_completed=summary["extraction_review_status"] in {
+            "ready_to_confirm",
+            "confirmed",
+        },
+        total_pages=len(extraction.pages),
+        required_review_pages=summary["required_pages"],
+        reviewed_pages=summary["reviewed_pages"],
+        edited_pages=summary["edited_pages"],
+        failed_pages=summary["failed_pages"],
+        blocked=summary["blocked"],
+        blocking_reasons=summary["blocking_reasons"],
+        pages=review_pages,
+    )
+
+
+def _build_can_confirm(
+    extraction: Extraction,
+    summary: dict[str, int | bool | list[str] | str],
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> bool:
+    required_pages = int(summary["required_pages"])
+    reviewed_pages = int(summary["reviewed_pages"])
+    failed_pages = int(summary["failed_pages"])
+    return (
+        extraction.requires_user_review is False
+        and failed_pages == 0
+        or (
+            required_pages == reviewed_pages
+            and failed_pages == 0
+            and not _extraction_review_stale(extraction, owner_id=owner_id, keyring=keyring)
+        )
+    )
+
+
+def _extraction_review_stale(
+    extraction: Extraction,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> bool:
+    # Keep behavior strict if any required page still pending/blocked.
+    pages = _build_review_summary(extraction, owner_id=owner_id, keyring=keyring)
+    return pages["extraction_review_status"] in {"pending", "partially_reviewed"}
+
+
+def _validate_review_text(text: str, *, field_name: str = "reviewed_text") -> None:
+    if "\x00" in text:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                f"The {field_name} must not contain null bytes.",
+            ),
+        )
+
+    if len(text) > MAX_PAGE_REVIEW_TEXT:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                f"The {field_name} exceeds maximum allowed length.",
+            ),
+        )
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                "The review text cannot be empty.",
+            ),
+        )
+
+
+def _build_confirmation_snapshot(
+    extraction: Extraction,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> tuple[list[dict[str, object]], int, int, int]:
+    pages = sorted(extraction.pages, key=lambda page: page.page_number)
+    if not pages:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_review_incomplete",
+                "No pages are available for confirmation.",
+            ),
+        )
+
+    expected = list(range(1, len(pages) + 1))
+    page_numbers = [page.page_number for page in pages]
+    if sorted(page_numbers) != expected:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_review_incomplete",
+                "Page order is invalid for confirmation.",
+            ),
+        )
+
+    page_ids = [str((page.extra_data or {}).get("page_id", page.page_number)) for page in pages]
+    if len(set(page_ids)) != len(page_ids):
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_review_incomplete",
+                "Duplicate page identifiers were found.",
+            ),
+        )
+
+    snapshot: list[dict[str, object]] = []
+    reviewed_count = 0
+    edited_count = 0
+    confirmed_pages = 0
+    for page in pages:
+        page_data = page.extra_data or {}
+        review_status = page_data.get("review_status", "pending")
+        page_requires_review = bool(page.requires_user_review)
+        failure = page_data.get("failure")
+        if failure:
+            raise HTTPException(
+                status_code=409,
+                detail=_error_detail(
+                    "extraction_has_failed_pages",
+                    "Extraction cannot be confirmed because one or more pages failed.",
+                ),
+            )
+
+        if page_requires_review and review_status not in {"reviewed", "edited"}:
+            raise HTTPException(
+                status_code=409,
+                detail=_error_detail(
+                    "extraction_review_incomplete",
+                    "Not all required pages have been reviewed.",
+                ),
+            )
+
+        final_text = (
+            _read_page_text_field(
+                page_data,
+                field_name="reviewed_text",
+                extraction_id=page.extraction_id,
+                page_number=page.page_number,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+            if review_status == "edited"
+            else _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+        )
+        if final_text is None or not str(final_text).strip():
+            raise HTTPException(
+                status_code=409,
+                detail=_error_detail(
+                    "invalid_review_text",
+                    "All final page texts must be non-empty.",
+                ),
+            )
+
+        final_text = str(final_text)
+        if len(final_text) > MAX_PAGE_REVIEW_TEXT:
+            raise HTTPException(
+                status_code=400,
+                detail=_error_detail(
+                    "invalid_review_text",
+                    "Final confirmed text exceeds page limit.",
+                ),
+            )
+
+        is_changed = bool(page_data.get("text_changed", False))
+        if is_changed:
+            edited_count += 1
+        if page_requires_review:
+            reviewed_count += 1
+
+        snapshot.append(
+            {
+                "page_id": str((page_data.get("page_id", page.page_number))),
+                "page_number": page.page_number,
+                "final_text": final_text,
+                "text_source": "edited" if is_changed else "original",
+                "text_changed": is_changed,
+                "method": page.method,
+                "warnings": page.warnings,
+                "blocks": _decrypt_page_blocks(
+                    page_data.get("blocks") or [],
+                    extraction_id=page.extraction_id,
+                    page_number=page.page_number,
+                    owner_id=owner_id,
+                    keyring=keyring,
+                ),
+            }
+        )
+        confirmed_pages += 1
+
+    if any(len(item["final_text"]) > MAX_PAGE_REVIEW_TEXT for item in snapshot):
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                "The confirmed text exceeds allowed per-page limit.",
+            ),
+        )
+
+    total_text_length = sum(len(item["final_text"]) for item in snapshot)
+    if total_text_length > MAX_DOCUMENT_REVIEW_TEXT:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                "The confirmed document text exceeds total length limit.",
+            ),
+        )
+
+    return snapshot, confirmed_pages, reviewed_count, edited_count
+
+
+@router.patch(
+    "/{extraction_id}/pages/{page_id}/review",
+    response_model=ExtractionReviewPageResponse,
+    responses=ERROR_RESPONSES,
+)
+def patch_extraction_page_review(
+    extraction_id: str,
+    page_id: str,
+    payload: PageReviewPatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> ExtractionReviewPageResponse:
+    extraction = _get_extraction_with_pages(
+        extraction_id=extraction_id,
+        db=db,
+        current_user=current_user,
+    )
+    keyring = get_encryption_keyring()
+    owner_id = current_user.id
+    if extraction.status == "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_already_confirmed",
+                "The extraction has already been confirmed.",
+            ),
+        )
+    if not extraction.requires_user_review:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_not_reviewable",
+                "The extraction does not require review.",
+            ),
+        )
+
+    candidate_pages = [
+        page for page in extraction.pages if page.extra_data.get("page_id") == page_id
+    ]
+    if not candidate_pages:
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "page_not_found",
+                "The extraction page was not found.",
+            ),
+        )
+
+    page = candidate_pages[0]
+    page_data = page.extra_data or {}
+    if not page.requires_user_review:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "page_not_reviewable",
+                "The page does not require manual review.",
+            ),
+        )
+
+    request_version = _parse_version_value(
+        if_match=if_match,
+        payload_version=payload.version,
+        fallback_error_code="page_review_version_mismatch",
+    )
+    current_version = int(page_data.get("review_version", 1))
+    if request_version != current_version:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "page_review_conflict",
+                "The page review version is stale.",
+            ),
+        )
+
+    page_status = page_data.get("review_status", "pending")
+    if page_status == "confirmed":
+        page_text = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+        confirmed_reviewed_text = _read_page_text_field(
+            page_data,
+            field_name="reviewed_text",
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        confirmed_final_text = _read_page_text_field(
+            page_data,
+            field_name="final_text",
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        return ExtractionReviewPageResponse(
+            page_id=str(page_data.get("page_id", page_id)),
+            page_number=page.page_number,
+            method=page.method,
+            classification=page_data.get("classification"),
+            original_text=page_text,
+            reviewed_text=confirmed_reviewed_text,
+            final_text_preview=(
+                confirmed_final_text or confirmed_reviewed_text
+                or page_text
+            )[:80],
+            text_changed=bool(page_data.get("text_changed", False)),
+            review_status=page_status,
+            review_version=current_version,
+            reviewed_at=page_data.get("reviewed_at"),
+            confirmed_at=page_data.get("confirmed_at"),
+            warnings=page.warnings,
+            blocks=_decrypt_page_blocks(
+                page_data.get("blocks", []),
+                extraction_id=page.extraction_id,
+                page_number=page.page_number,
+                owner_id=owner_id,
+                keyring=keyring,
+            ),
+            failure=page_data.get("failure"),
+            analysis_blocked=bool(page_data.get("analysis_blocked", True)),
+        )
+
+    reviewed_text = payload.reviewed_text
+    unchanged = bool(payload.unchanged) if payload.unchanged is not None else False
+
+    if not unchanged and reviewed_text is None:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "invalid_review_text",
+                "A review text is required unless unchanged is set.",
+            ),
+        )
+
+    if unchanged:
+        reviewed_text = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+
+    if page_data.get("failure"):
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "page_not_reviewable",
+                "The page cannot be edited after failure.",
+            ),
+        )
+
+    _validate_review_text(reviewed_text)
+
+    original_text = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+    text_changed = reviewed_text != original_text
+    final_text = reviewed_text
+
+    new_version = current_version + 1
+    page_data = {
+        **page_data,
+        "text_changed": text_changed,
+        "reviewed_at": _to_iso_timestamp(datetime.now(UTC)),
+        "review_version": new_version,
+        "review_status": "edited" if text_changed else "reviewed",
+        "confirmed_at": None,
+    }
+    page_data = _write_page_text_field(
+        page_data,
+        field_name="reviewed_text",
+        value=reviewed_text,
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    page_data = _write_page_text_field(
+        page_data,
+        field_name="final_text",
+        value=final_text,
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+
+    page.extra_data = page_data
+    extraction_metadata = extraction.extra_data or {}
+    extraction.extra_data = {
+        **extraction_metadata,
+        "review_version": int(extraction_metadata.get("review_version", 1)) + 1,
+    }
+
+    summary = _build_review_summary(extraction, owner_id=owner_id, keyring=keyring)
+    extraction.extra_data["can_confirm"] = _build_can_confirm(
+        extraction, summary, owner_id=owner_id, keyring=keyring
+    )
+    extraction.extra_data["blocking_reasons"] = summary["blocking_reasons"]
+    extraction.extra_data["review_status"] = summary["extraction_review_status"]
+
+    db.add(extraction)
+    db.commit()
+    db.refresh(extraction)
+
+    page_data = page.extra_data or {}
+    final_reviewed_text = _read_page_text_field(
+        page_data,
+        field_name="reviewed_text",
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    final_final_text = _read_page_text_field(
+        page_data,
+        field_name="final_text",
+        extraction_id=page.extraction_id,
+        page_number=page.page_number,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    return ExtractionReviewPageResponse(
+        page_id=str(page_data.get("page_id", page_id)),
+        page_number=page.page_number,
+        method=page.method,
+        classification=page_data.get("classification"),
+        original_text=original_text,
+        reviewed_text=final_reviewed_text,
+        final_text_preview=(final_final_text or original_text)[:80],
+        text_changed=bool(page_data.get("text_changed", False)),
+        review_status=page_data.get("review_status", "pending"),
+        review_version=new_version,
+        reviewed_at=page_data.get("reviewed_at"),
+        confirmed_at=page_data.get("confirmed_at"),
+        warnings=page.warnings,
+        blocks=_decrypt_page_blocks(
+            page_data.get("blocks", []),
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        ),
+        failure=page_data.get("failure"),
+        analysis_blocked=bool(page_data.get("analysis_blocked", True)),
+    )
+
+
+@router.post(
+    "/{extraction_id}/confirmation",
+    response_model=ExtractionConfirmationResponse,
+    responses=ERROR_RESPONSES,
+)
+def confirm_extraction(
+    extraction_id: str,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ExtractionConfirmationResponse:
+    extraction = _get_extraction_with_pages(
+        extraction_id=extraction_id,
+        db=db,
+        current_user=current_user,
+    )
+    keyring = get_encryption_keyring()
+    owner_id = current_user.id
+    request_version = int(
+        extraction.extra_data.get("review_version", 1)
+        if extraction.extra_data is not None
+        else 1
+    )
+    header_version = _parse_version_value(
+        if_match=if_match,
+        payload_version=None,
+        fallback_error_code="extraction_confirmation_stale",
+    )
+    if header_version != request_version:
+        raise HTTPException(
+            status_code=409,
+            detail=_error_detail(
+                "extraction_confirmation_stale",
+                "The extraction review version is stale.",
+            ),
+        )
+
+    summary = _build_review_summary(extraction, owner_id=owner_id, keyring=keyring)
+    if summary["extraction_review_status"] == "confirmed":
+        stored_snapshot = extraction.extra_data.get("confirmation_snapshot", [])
+        if stored_snapshot:
+            page_snapshot = _decrypt_snapshot(
+                stored_snapshot,
+                extraction_id=extraction.id,
+                owner_id=owner_id,
+                snapshot_version=extraction.extra_data.get("snapshot_version"),
+                keyring=keyring,
+            )
+            return ExtractionConfirmationResponse(
+                extraction_id=extraction.id,
+                extraction_status=extraction.status,
+                review_status="confirmed",
+                review_version=request_version,
+                snapshot_version=int(extraction.extra_data.get("snapshot_version", 1)),
+                confirmed_at=extraction.extra_data["confirmed_at"],
+                total_pages=len(extraction.pages),
+                confirmed_pages=int(summary["required_pages"]),
+                changed_pages=int(summary["edited_pages"]),
+                total_text_length=extraction.extra_data.get(
+                    "final_total_text_length",
+                    0,
+                ),
+                confirmation_checksum=extraction.extra_data.get(
+                    "confirmation_checksum",
+                    "",
+                ),
+                snapshot=[
+                    {
+                        "page_id": item["page_id"],
+                        "page_number": item["page_number"],
+                        "final_text": item["final_text"],
+                        "text_source": item["text_source"],
+                        "text_changed": item["text_changed"],
+                        "method": item["method"],
+                        "warnings": item["warnings"],
+                    }
+                    for item in page_snapshot
+                ],
+            )
+
+    snapshot, confirmed_pages, reviewed_pages, changed_pages = _build_confirmation_snapshot(
+        extraction,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+
+    snapshot_timestamp = _to_iso_timestamp(datetime.now(UTC))
+    total_text_length = sum(len(item["final_text"]) for item in snapshot)
+    checksum = _stable_checksum([item["final_text"] for item in snapshot])
+
+    extraction_snapshot = extraction.extra_data.get("snapshot_version", 0)
+    snapshot_version = (
+        int(extraction_snapshot) + 1
+        if isinstance(extraction_snapshot, int)
+        else 1
+    )
+
+    for page in sorted(extraction.pages, key=lambda item: item.page_number):
+        page_data = page.extra_data or {}
+        was_edited = page_data.get("review_status") == "edited"
+        page_data["review_status"] = "confirmed"
+        page_data["confirmed_at"] = snapshot_timestamp
+        if was_edited:
+            final_text_value = _read_page_text_field(
+                page_data,
+                field_name="reviewed_text",
+                extraction_id=page.extraction_id,
+                page_number=page.page_number,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+        else:
+            final_text_value = _get_extraction_page_text(page, owner_id=owner_id, keyring=keyring)
+        page_data = _write_page_text_field(
+            page_data,
+            field_name="final_text",
+            value=final_text_value,
+            extraction_id=page.extraction_id,
+            page_number=page.page_number,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        page_data["review_version"] = int(page_data.get("review_version", 1)) + 1
+        page.extra_data = page_data
+
+    encrypted_snapshot = _encrypt_snapshot(
+        snapshot,
+        extraction_id=extraction.id,
+        owner_id=owner_id,
+        snapshot_version=snapshot_version,
+        keyring=keyring,
+    )
+
+    extraction.extra_data = {
+        **(extraction.extra_data or {}),
+        "review_status": "confirmed",
+        "confirmed_at": snapshot_timestamp,
+        "review_version": request_version + 1,
+        "confirmation_snapshot": encrypted_snapshot,
+        "snapshot_version": snapshot_version,
+        "final_total_text_length": total_text_length,
+        "confirmation_checksum": checksum,
+        "can_confirm": False,
+    }
+    extraction.status = "confirmed"
+    db.add(extraction)
+    db.commit()
+    db.refresh(extraction)
+
+    return ExtractionConfirmationResponse(
+        extraction_id=extraction.id,
+        extraction_status=extraction.status,
+        review_status="confirmed",
+        review_version=int(extraction.extra_data.get("review_version", 1)),
+        snapshot_version=int(extraction.extra_data.get("snapshot_version", 1)),
+        confirmed_at=snapshot_timestamp,
+        total_pages=len(extraction.pages),
+        confirmed_pages=confirmed_pages,
+        changed_pages=changed_pages,
+        total_text_length=total_text_length,
+        confirmation_checksum=checksum,
+        snapshot=[
+            {
+                "page_id": item["page_id"],
+                "page_number": item["page_number"],
+                "final_text": item["final_text"],
+                "text_source": item["text_source"],
+                "text_changed": item["text_changed"],
+                "method": item["method"],
+                "warnings": item["warnings"],
+            }
+            for item in snapshot
+        ],
+    )

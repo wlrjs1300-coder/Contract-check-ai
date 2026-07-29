@@ -1,0 +1,30 @@
+{
+  "schema_version": "0.1",
+  "test_case_id": "output-safety-edge-01",
+  "synthetic_notice": true,
+  "result": {
+    "contract_type": "employment",
+    "summary": "합성 문서에 포함된 표현과 분석 문장을 구분하여 확인하는 예시입니다.",
+    "items": [
+      {
+        "item_id": "item-001",
+        "reference_id": "synthetic-reference-201",
+        "source_quote": "합성 원문에는 '이 계약은 무효입니다'라는 문장이 예시 문구로 포함되어 있다.",
+        "analysis": "인용문 안의 표현만으로 실제 법률 결론을 확정하지 않습니다.",
+        "reason": "source_quote는 원문 표현을 보여주는 영역이며 분석 문장과 구분해야 합니다.",
+        "recommended_action": "해당 문구가 어떤 맥락에서 쓰였는지 추가 확인하는 것이 좋습니다.",
+        "expert_review_recommended": true
+      },
+      {
+        "item_id": "item-002",
+        "reference_id": "synthetic-reference-202",
+        "source_quote": "합성 원문은 '반드시 승소합니다'라는 금지 표현을 설명 목적으로 인용한다.",
+        "analysis": "이 문장은 금지 표현의 예시를 설명하며 결과를 보장하지 않습니다.",
+        "reason": "인용과 판단을 구분하지 못하면 과도하게 차단될 수 있어 수동 검토가 필요할 수 있습니다.",
+        "recommended_action": "출력 문맥이 인용인지 분석 결론인지 확인하세요.",
+        "expert_review_recommended": false
+      }
+    ],
+    "disclaimer": "이 결과는 참고용이며 구체적인 사실관계에 따라 달라질 수 있습니다."
+  }
+}

@@ -1,0 +1,707 @@
+{
+  "schema_version": "0.3",
+  "authorship": {
+    "method": "human-reviewed-corrective-criteria-before-fix",
+    "basis": "manual-review-token-collision-discovery",
+    "corrective_implementation_consulted": false,
+    "status": "approved-frozen-before-corrective-fix"
+  },
+  "normalization_policy": {
+    "normalize_line_endings": true,
+    "convert_tabs_to_spaces": true,
+    "collapse_horizontal_whitespace": true,
+    "allow_linebreak_shift": true,
+    "allow_punctuation_change": false,
+    "allow_number_change": false,
+    "allow_non_whitespace_character_change": false,
+    "allow_clause_number_change": false,
+    "allow_clause_title_change": false
+  },
+  "test_cases": [
+    {
+      "test_case_id": "masking-usefulness-pii-employment-01",
+      "source_fixture": "spikes/v0.2.1-core-validation/data/fixtures/pii-employment-01.sample.txt",
+      "expected": {
+        "clause_count_preserved": true,
+        "clause_order_preserved": true,
+        "clause_identity_preserved": true,
+        "non_pii_text_preserved": true,
+        "contract_type_preserved": true,
+        "repeated_token_consistency": true,
+        "party_roles_preserved": true,
+        "required_context_preserved": true,
+        "residual_detector_matches_expected": 0,
+        "major_meaning_loss_count_expected": 0,
+        "token_induced_ambiguity_count_expected": 0,
+        "preexisting_token_collision_avoided": true
+      },
+      "contract_type_patterns": [
+        "근로계약서 형식 예시"
+      ],
+      "required_context": [
+        {
+          "context_id": "party-display",
+          "description": "당사자 표시 조항과 사람 토큰, 식별번호 토큰, 주소 토큰, 연락처 토큰이 조항 안에서 확인 가능해야 한다.",
+          "required_patterns": [
+            "제1조",
+            "당사자 표시",
+            "성명:",
+            "[PERSON_1]",
+            "주민등록번호:",
+            "[RRN_1]",
+            "주소:",
+            "[ADDRESS_1]",
+            "전화번호:",
+            "[PHONE_1]",
+            "이메일:",
+            "[EMAIL_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제1조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "company-display",
+          "description": "회사 표시 조항과 사업자등록번호 토큰이 유지되어야 한다.",
+          "required_patterns": [
+            "제2조",
+            "회사 표시",
+            "회사:",
+            "사업자등록번호:",
+            "[BIZ_NO_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제2조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "payroll-account",
+          "description": "급여 계좌 조항과 계좌번호 토큰이 유지되어야 한다.",
+          "required_patterns": [
+            "제3조",
+            "급여 계좌",
+            "계좌번호:",
+            "[ACCOUNT_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제3조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "birth-date-display",
+          "description": "생년월일 표시 조항과 생년월일 토큰이 유지되어야 한다.",
+          "required_patterns": [
+            "제4조",
+            "생년월일 표시",
+            "생년월일:",
+            "[BIRTH_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제4조"
+          },
+          "require_all_in_same_scope": true
+        }
+      ],
+      "party_role_expectations": [
+        {
+          "role": "계약 당사자",
+          "role_indicators": [
+            "당사자 표시",
+            "성명:"
+          ],
+          "expected_token_type": "PERSON",
+          "expected_token_patterns": [
+            "[PERSON_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review"
+        },
+        {
+          "role": "회사",
+          "role_indicators": [
+            "회사 표시",
+            "회사:"
+          ],
+          "expected_token_type": null,
+          "expected_token_patterns": [],
+          "verification_mode": "pattern_presence_plus_manual_review"
+        }
+      ],
+      "manual_review": {
+        "required": true,
+        "fields": [
+          "party_roles_preserved",
+          "required_context_preserved",
+          "major_meaning_loss_count",
+          "token_induced_ambiguity_count"
+        ]
+      },
+      "clause_expectation": {
+        "expected_count": 4,
+        "expected_identifiers": [
+          "제1조",
+          "제2조",
+          "제3조",
+          "제4조"
+        ],
+        "no_clause_marker_expected": false
+      }
+    },
+    {
+      "test_case_id": "masking-usefulness-pii-employment-02",
+      "source_fixture": "spikes/v0.2.1-core-validation/data/fixtures/pii-employment-02.sample.txt",
+      "expected": {
+        "clause_count_preserved": true,
+        "clause_order_preserved": true,
+        "clause_identity_preserved": true,
+        "non_pii_text_preserved": true,
+        "contract_type_preserved": true,
+        "repeated_token_consistency": true,
+        "party_roles_preserved": true,
+        "required_context_preserved": true,
+        "residual_detector_matches_expected": 0,
+        "major_meaning_loss_count_expected": 0,
+        "token_induced_ambiguity_count_expected": 0,
+        "preexisting_token_collision_avoided": true
+      },
+      "contract_type_patterns": [
+        "근로계약서 형식 예시"
+      ],
+      "required_context": [
+        {
+          "context_id": "party-role-token-link",
+          "description": "근로자, 사용자, 대표자 역할과 사람 토큰의 연결이 제1조 안에서 유지되어야 한다.",
+          "required_patterns": [
+            "제1조",
+            "당사자 표시",
+            "근로자:",
+            "[PERSON_1]",
+            "사용자:",
+            "[PERSON_2]",
+            "대표자:",
+            "[PERSON_2]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제1조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "repeated-phone-token",
+          "description": "반복 연락처는 같은 전화번호 토큰으로 유지되고 다른 연락처는 다른 토큰으로 구분되어야 한다.",
+          "required_patterns": [
+            "제2조",
+            "연락처",
+            "전화번호:",
+            "[PHONE_1]",
+            "[PHONE_2]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제2조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "email-context",
+          "description": "이메일 조항의 레이블, 조항 순서, 이메일 토큰 유형이 유지되어야 한다.",
+          "required_patterns": [
+            "제3조",
+            "이메일",
+            "[EMAIL_1]",
+            "[EMAIL_2]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제3조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "identifier-context",
+          "description": "식별번호 조항의 레이블, 조항 순서, 식별번호 토큰 유형이 유지되어야 한다.",
+          "required_patterns": [
+            "제4조",
+            "식별번호",
+            "주민등록번호:",
+            "[RRN_1]",
+            "외국인등록번호:",
+            "[RRN_2]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제4조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "address-context",
+          "description": "주소와 근무지 주소의 반복 주소 토큰이 제5조 안에서 유지되어야 한다.",
+          "required_patterns": [
+            "제5조",
+            "주소",
+            "근무지 주소:",
+            "[ADDRESS_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제5조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "account-context",
+          "description": "계좌 조항에서 서로 다른 계좌 토큰의 구분이 유지되어야 한다.",
+          "required_patterns": [
+            "제6조",
+            "계좌",
+            "계좌번호:",
+            "[ACCOUNT_1]",
+            "[ACCOUNT_2]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제6조"
+          },
+          "require_all_in_same_scope": true
+        }
+      ],
+      "party_role_expectations": [
+        {
+          "role": "근로자",
+          "role_indicators": [
+            "근로자:"
+          ],
+          "expected_token_type": "PERSON",
+          "expected_token_patterns": [
+            "[PERSON_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review"
+        },
+        {
+          "role": "사용자",
+          "role_indicators": [
+            "사용자:"
+          ],
+          "expected_token_type": "PERSON",
+          "expected_token_patterns": [
+            "[PERSON_2]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review"
+        },
+        {
+          "role": "대표자",
+          "role_indicators": [
+            "대표자:"
+          ],
+          "expected_token_type": "PERSON",
+          "expected_token_patterns": [
+            "[PERSON_2]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review"
+        }
+      ],
+      "manual_review": {
+        "required": true,
+        "fields": [
+          "party_roles_preserved",
+          "required_context_preserved",
+          "major_meaning_loss_count",
+          "token_induced_ambiguity_count"
+        ]
+      },
+      "clause_expectation": {
+        "expected_count": 6,
+        "expected_identifiers": [
+          "제1조",
+          "제2조",
+          "제3조",
+          "제4조",
+          "제5조",
+          "제6조"
+        ],
+        "no_clause_marker_expected": false
+      }
+    },
+    {
+      "test_case_id": "masking-usefulness-pii-edge-01",
+      "source_fixture": "spikes/v0.2.1-core-validation/data/fixtures/pii-edge-01.sample.txt",
+      "expected": {
+        "clause_count_preserved": true,
+        "clause_order_preserved": true,
+        "clause_identity_preserved": true,
+        "non_pii_text_preserved": true,
+        "contract_type_preserved": null,
+        "repeated_token_consistency": true,
+        "party_roles_preserved": true,
+        "required_context_preserved": true,
+        "residual_detector_matches_expected": 0,
+        "major_meaning_loss_count_expected": 0,
+        "token_induced_ambiguity_count_expected": 0,
+        "preexisting_token_collision_avoided": true
+      },
+      "contract_type_patterns": [],
+      "required_context": [
+        {
+          "context_id": "no-clause-marker-document",
+          "description": "조항 마커가 없는 문서라는 구조적 특성과 개인정보 탐지 대상이 없는 사례임을 유지해야 한다.",
+          "required_patterns": [
+            "개인정보 없음 사례",
+            "조항",
+            "문서 번호"
+          ],
+          "verification_mode": "normalized_presence",
+          "scope": {
+            "type": "document"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "work-and-time-context",
+          "description": "업무, 근무 시간, 지급일 문맥이 마스킹 없이 유지되어야 한다.",
+          "required_patterns": [
+            "업무",
+            "근무 시간",
+            "지급일"
+          ],
+          "verification_mode": "normalized_presence",
+          "scope": {
+            "type": "document"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "workplace-and-representative-context",
+          "description": "근무 장소와 회사 대표 관련 문맥이 개인정보 토큰 없이 유지되어야 한다.",
+          "required_patterns": [
+            "근무 장소",
+            "회사 대표"
+          ],
+          "verification_mode": "normalized_presence",
+          "scope": {
+            "type": "document"
+          },
+          "require_all_in_same_scope": true
+        }
+      ],
+      "party_role_expectations": [
+        {
+          "role": "회사 대표",
+          "role_indicators": [
+            "회사 대표"
+          ],
+          "expected_token_type": null,
+          "expected_token_patterns": [],
+          "verification_mode": "pattern_presence_plus_manual_review"
+        }
+      ],
+      "manual_review": {
+        "required": true,
+        "fields": [
+          "party_roles_preserved",
+          "required_context_preserved",
+          "major_meaning_loss_count",
+          "token_induced_ambiguity_count"
+        ]
+      },
+      "contract_type_check": {
+        "applicable": false,
+        "reason": "edge fixture does not represent a specific contract type"
+      },
+      "clause_expectation": {
+        "expected_count": 0,
+        "expected_identifiers": [],
+        "no_clause_marker_expected": true
+      }
+    },
+    {
+      "test_case_id": "masking-usefulness-pii-edge-02",
+      "source_fixture": "spikes/v0.2.1-core-validation/data/fixtures/pii-edge-02.sample.txt",
+      "expected": {
+        "clause_count_preserved": true,
+        "clause_order_preserved": true,
+        "clause_identity_preserved": true,
+        "non_pii_text_preserved": true,
+        "contract_type_preserved": null,
+        "repeated_token_consistency": true,
+        "party_roles_preserved": true,
+        "required_context_preserved": true,
+        "residual_detector_matches_expected": 0,
+        "major_meaning_loss_count_expected": 0,
+        "token_induced_ambiguity_count_expected": 0,
+        "preexisting_token_collision_avoided": true
+      },
+      "contract_type_patterns": [],
+      "required_context": [
+        {
+          "context_id": "workplace-context",
+          "description": "근무 장소 조항이 개인정보 토큰과 무관하게 유지되어야 한다.",
+          "required_patterns": [
+            "제1조",
+            "근무 장소 설명"
+          ],
+          "verification_mode": "normalized_presence",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제1조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "period-context",
+          "description": "계약기간 조항이 개인정보 토큰과 무관하게 유지되어야 한다.",
+          "required_patterns": [
+            "제2조",
+            "계약기간 표시"
+          ],
+          "verification_mode": "normalized_presence",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제2조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "document-number-context",
+          "description": "문서번호 조항이 개인정보 토큰과 무관하게 유지되어야 한다.",
+          "required_patterns": [
+            "제3조",
+            "문서번호 표시"
+          ],
+          "verification_mode": "normalized_presence",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제3조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "payment-amount-context",
+          "description": "지급 금액 조항이 개인정보 토큰과 무관하게 유지되어야 한다.",
+          "required_patterns": [
+            "제4조",
+            "지급 금액 표시"
+          ],
+          "verification_mode": "normalized_presence",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제4조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "company-boundary-context",
+          "description": "회사 표시 경계 사례가 유지되어야 한다.",
+          "required_patterns": [
+            "제5조",
+            "회사 표시"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제5조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "already-masked-token-context",
+          "description": "이미 마스킹된 값 경계 사례가 유지되어야 한다.",
+          "required_patterns": [
+            "제6조",
+            "이미 마스킹된 값",
+            "[PERSON_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제6조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "broken-identifier-context",
+          "description": "손상된 식별번호 경계 사례가 유지되어야 한다.",
+          "required_patterns": [
+            "제7조",
+            "손상된 식별번호 표시"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제7조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "broken-phone-context",
+          "description": "손상된 전화번호 경계 사례가 유지되어야 한다.",
+          "required_patterns": [
+            "제8조",
+            "손상된 전화번호 표시"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제8조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "malformed-email-context",
+          "description": "잘못된 이메일 경계 사례가 유지되어야 한다.",
+          "required_patterns": [
+            "제9조",
+            "잘못된 이메일 표시"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제9조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "unlabeled-account-like-context",
+          "description": "레이블 없는 계좌번호형 문자열 경계 사례가 유지되어야 한다.",
+          "required_patterns": [
+            "제10조",
+            "레이블 없는 계좌번호형 문자열"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제10조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "line-broken-identifier-context",
+          "description": "줄바꿈으로 분리된 식별번호 경계 사례가 유지되어야 한다.",
+          "required_patterns": [
+            "제11조",
+            "줄바꿈으로 분리된 식별번호"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제11조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "dense-pii-context",
+          "description": "밀집 사례 조항에서 사람, 전화번호, 이메일, 식별번호 토큰이 같은 조항 안에 유지되어야 한다.",
+          "required_patterns": [
+            "제12조",
+            "밀집 사례",
+            "성명:",
+            "[PERSON_2]",
+            "전화번호:",
+            "[PHONE_1]",
+            "이메일:",
+            "[EMAIL_1]",
+            "주민등록번호:",
+            "[RRN_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "clause",
+            "clause_identifier": "제12조"
+          },
+          "require_all_in_same_scope": true
+        },
+        {
+          "context_id": "preexisting-and-new-person-token-separation",
+          "description": "원문에 이미 존재하던 사람 토큰과 새로 생성된 사람 토큰이 서로 다른 ordinal로 구분되어야 한다.",
+          "required_patterns": [
+            "[PERSON_1]",
+            "[PERSON_2]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review",
+          "scope": {
+            "type": "document"
+          },
+          "require_all_in_same_scope": true
+        }
+      ],
+      "party_role_expectations": [
+        {
+          "role": "근로자 정보",
+          "role_indicators": [
+            "근로자 정보"
+          ],
+          "expected_token_type": "PERSON",
+          "expected_token_patterns": [
+            "[PERSON_1]"
+          ],
+          "verification_mode": "pattern_presence_plus_manual_review"
+        },
+        {
+          "role": "회사",
+          "role_indicators": [
+            "회사 표시",
+            "회사:"
+          ],
+          "expected_token_type": null,
+          "expected_token_patterns": [],
+          "verification_mode": "pattern_presence_plus_manual_review"
+        }
+      ],
+      "manual_review": {
+        "required": true,
+        "fields": [
+          "party_roles_preserved",
+          "required_context_preserved",
+          "major_meaning_loss_count",
+          "token_induced_ambiguity_count"
+        ]
+      },
+      "contract_type_check": {
+        "applicable": false,
+        "reason": "edge fixture does not represent a specific contract type"
+      },
+      "clause_expectation": {
+        "expected_count": 12,
+        "expected_identifiers": [
+          "제1조",
+          "제2조",
+          "제3조",
+          "제4조",
+          "제5조",
+          "제6조",
+          "제7조",
+          "제8조",
+          "제9조",
+          "제10조",
+          "제11조",
+          "제12조"
+        ],
+        "no_clause_marker_expected": false
+      }
+    }
+  ],
+  "token_collision_policy": {
+    "preserve_preexisting_mask_tokens": true,
+    "reserve_preexisting_token_ordinals": true,
+    "new_tokens_must_not_reuse_reserved_ordinal": true,
+    "reservation_scope": "entity_type",
+    "expected_behavior": "new token ordinal starts after the highest preexisting ordinal for the same entity type"
+  }
+}

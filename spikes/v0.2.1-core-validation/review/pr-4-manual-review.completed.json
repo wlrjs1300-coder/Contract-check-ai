@@ -1,0 +1,38 @@
+{
+  "schema_version": "0.1",
+  "review_status": "completed",
+  "test_cases": [
+    {
+      "test_case_id": "masking-usefulness-pii-employment-01",
+      "party_roles_preserved": true,
+      "required_context_preserved": true,
+      "major_meaning_loss_count": 0,
+      "token_induced_ambiguity_count": 0,
+      "reviewer_basis": "source-masked-frozen-criteria-only"
+    },
+    {
+      "test_case_id": "masking-usefulness-pii-employment-02",
+      "party_roles_preserved": true,
+      "required_context_preserved": true,
+      "major_meaning_loss_count": 0,
+      "token_induced_ambiguity_count": 0,
+      "reviewer_basis": "source-masked-frozen-criteria-only"
+    },
+    {
+      "test_case_id": "masking-usefulness-pii-edge-01",
+      "party_roles_preserved": true,
+      "required_context_preserved": true,
+      "major_meaning_loss_count": 0,
+      "token_induced_ambiguity_count": 0,
+      "reviewer_basis": "source-masked-frozen-criteria-only"
+    },
+    {
+      "test_case_id": "masking-usefulness-pii-edge-02",
+      "party_roles_preserved": true,
+      "required_context_preserved": true,
+      "major_meaning_loss_count": 0,
+      "token_induced_ambiguity_count": 1,
+      "reviewer_basis": "source-masked-frozen-criteria-only"
+    }
+  ]
+}

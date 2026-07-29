@@ -1,0 +1,9 @@
+{
+  "experiment_id": "v0.2.1-core-validation-example",
+  "seed": 20260712,
+  "output_directory": "spikes/v0.2.1-core-validation/data/generated/",
+  "document_count": 3,
+  "fixture_count": 2,
+  "include_edge_cases": true,
+  "include_failure_cases": false
+}

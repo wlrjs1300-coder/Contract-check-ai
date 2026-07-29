@@ -1,0 +1,30 @@
+{
+  "schema_version": "0.1",
+  "test_case_id": "output-safety-clear-01",
+  "synthetic_notice": true,
+  "result": {
+    "contract_type": "employment",
+    "summary": "합성 근로계약서 분석 예시입니다. 전체적으로 확인할 항목을 정리하며 법률적 결론을 확정하지 않습니다.",
+    "items": [
+      {
+        "item_id": "item-001",
+        "reference_id": "synthetic-reference-001",
+        "source_quote": "근무 장소와 업무 범위는 회사가 정한 내부 안내 문서에 따라 협의하여 정한다.",
+        "analysis": "근무 장소와 업무 범위가 구체적으로 적혀 있는지 확인할 필요가 있습니다.",
+        "reason": "장소와 업무가 넓게 표현되면 실제 수행 범위에 대한 추가 확인이 필요할 수 있습니다.",
+        "recommended_action": "근무 장소, 업무 범위, 변경 절차를 담당자에게 추가 확인하는 것이 좋습니다.",
+        "expert_review_recommended": false
+      },
+      {
+        "item_id": "item-002",
+        "reference_id": "synthetic-reference-002",
+        "source_quote": "급여 지급일과 지급 방식은 별도 합의한 일정표를 따른다.",
+        "analysis": "급여 지급일과 지급 방식이 별도 문서에 의존하고 있어 확인 대상입니다.",
+        "reason": "별도 일정표가 계약서와 함께 제공되는지 확인하면 이해에 도움이 됩니다.",
+        "recommended_action": "급여 지급일, 지급 방식, 공제 항목을 문서로 확인해 보세요.",
+        "expert_review_recommended": true
+      }
+    ],
+    "disclaimer": "이 결과는 계약서 이해를 돕는 참고 자료이며 법률 자문이나 최종 판단이 아닙니다."
+  }
+}

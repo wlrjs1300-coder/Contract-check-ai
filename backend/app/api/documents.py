@@ -1,0 +1,802 @@
+from pathlib import Path
+from uuid import uuid4
+
+import logging
+import re
+
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from backend.app.db.database import get_db
+from backend.app.core.auth import get_current_user
+from backend.app.core.boundary_config import get_boundary_config
+from backend.app.core.logging import log_event
+from backend.app.core.rate_limit import enforce_user_rate_limit
+from backend.app.core.encryption_config import EncryptionKeyring, get_encryption_keyring
+from backend.app.db.models import (
+    AnalysisJob,
+    AnalysisResultItem,
+    Clause,
+    Document,
+    Extraction,
+)
+from backend.app.db.models import User
+from backend.app.services.clause_splitter import split_clauses
+from backend.app.services.evidence_linking import calculate_snapshot_hash
+from backend.app.services.nested_json_encryption import decrypt_confirmation_snapshot
+from backend.app.services.analysis_result_encryption import decrypt_analysis_value
+from backend.app.services.analysis_evidence_encryption import (
+    decrypt_analysis_evidence_list,
+)
+from backend.app.services.document_metadata_encryption import (
+    decrypt_unclassified_sections,
+    encrypt_unclassified_sections,
+)
+from backend.app.services.scalar_metadata_encryption import (
+    decrypt_clause_title,
+    decrypt_document_filename,
+    encrypt_clause_title,
+    encrypt_document_filename,
+)
+from backend.app.services.scalar_encryption import (
+    ScalarEncryptionError,
+    ScalarDecryptionError,
+    decrypt_clause_body,
+    decrypt_analysis_result_summary,
+    encrypt_clause_body,
+)
+
+
+router = APIRouter(prefix="/documents", tags=["documents"])
+
+ALLOWED_SUFFIXES = {".txt"}
+ALLOWED_TEXT_CONTENT_TYPES = {"text/plain"}
+UPLOAD_CHUNK_SIZE = 64 * 1024
+_DANGEROUS_INNER_SUFFIXES = {
+    ".bat", ".cmd", ".com", ".exe", ".html", ".js", ".pdf", ".ps1", ".py",
+    ".sh", ".tar", ".zip",
+}
+
+
+def _upload_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+    )
+
+
+def _validate_text_filename(filename: str) -> None:
+    if (
+        not filename
+        or len(filename) > 255
+        or filename != filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+        or ".." in filename
+        or re.search(r"[\x00-\x1f\x7f]", filename)
+        or any(encoded in filename.lower() for encoded in ("%00", "%0a", "%0d"))
+    ):
+        raise _upload_error(400, "INVALID_FILENAME", "The filename is invalid.")
+    path = Path(filename)
+    if path.suffix.lower() not in ALLOWED_SUFFIXES:
+        raise _upload_error(
+            415, "UNSUPPORTED_FILE_TYPE", "Only UTF-8 text files are supported."
+        )
+    if Path(path.stem).suffix.lower() in _DANGEROUS_INNER_SUFFIXES:
+        raise _upload_error(
+            415, "UNSUPPORTED_FILE_TYPE", "Only UTF-8 text files are supported."
+        )
+
+
+def _serialize_clause(
+    clause: Clause,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[str, object]:
+    try:
+        body = decrypt_clause_body(
+            clause.body_encrypted,
+            clause_id=clause.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        title = decrypt_clause_title(
+            clause.title_encrypted,
+            clause_id=clause.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
+
+    return {
+        "clause_id": clause.clause_id,
+        "reference_id": clause.reference_id,
+        "source_hash": clause.source_hash,
+        "ordinal": clause.ordinal,
+        "marker": clause.marker,
+        "clause_type": clause.clause_type,
+        "title": title,
+        "body": body,
+        "warnings": clause.warnings,
+    }
+
+
+def _serialize_document(
+    document: Document,
+    *,
+    keyring: EncryptionKeyring,
+) -> dict[str, object]:
+    clauses = sorted(document.clauses, key=lambda clause: clause.ordinal)
+    owner_id = document.owner_id
+    try:
+        filename = decrypt_document_filename(
+            document.filename_encrypted,
+            record_id=document.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+        unclassified_sections = decrypt_unclassified_sections(
+            document.unclassified_sections,
+            document_id=document.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
+
+    return {
+        "document_id": document.id,
+        "filename": filename,
+        "content_type": document.content_type,
+        "size_bytes": document.size_bytes,
+        "character_count": document.character_count,
+        "status": document.status,
+        "clause_count": len(clauses),
+        "clauses": [
+            _serialize_clause(clause, owner_id=owner_id, keyring=keyring)
+            for clause in clauses
+        ],
+        "unclassified_sections": unclassified_sections,
+        "document_warnings": document.document_warnings,
+    }
+
+
+def _snapshot_hash(snapshot: list[dict[str, object]]) -> str:
+    return calculate_snapshot_hash(snapshot)
+
+
+def _decrypt_analysis_values(
+    items: list[AnalysisResultItem],
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[int, dict[str, object]]:
+    """Decrypt each item's analysis_value once so repeated lookups (summary
+    aggregation and per-item serialization) don't re-decrypt the same row."""
+    values: dict[int, dict[str, object]] = {}
+    for item in items:
+        extra = item.extra_data or {}
+        raw_value = extra.get("analysis_value")
+        if raw_value is None:
+            if "evidence" in extra:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Stored encrypted data is unavailable.",
+                )
+            values[item.id] = {}
+            continue
+        try:
+            if not isinstance(raw_value, dict):
+                raise ScalarDecryptionError("Invalid analysis_value payload.")
+            decrypted_value = decrypt_analysis_value(
+                raw_value,
+                analysis_job_id=item.analysis_job_id,
+                clause_record_id=item.clause_record_id,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+            raw_evidence = decrypted_value.get("evidence", [])
+            if not isinstance(raw_evidence, list):
+                raise ScalarDecryptionError("Invalid evidence list.")
+            if (
+                "evidence" in extra
+                and extra.get("evidence") != raw_evidence
+            ):
+                raise ScalarDecryptionError("Invalid evidence storage.")
+            decrypted_value["evidence"] = decrypt_analysis_evidence_list(
+                raw_evidence,
+                analysis_job_id=item.analysis_job_id,
+                clause_record_id=item.clause_record_id,
+                owner_id=owner_id,
+                keyring=keyring,
+            )
+            values[item.id] = decrypted_value
+        except ScalarDecryptionError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Stored encrypted data is unavailable.",
+            ) from exc
+    return values
+
+
+def _analysis_value(
+    item: AnalysisResultItem,
+    *,
+    values_by_item_id: dict[int, dict[str, object]],
+) -> dict[str, object]:
+    return values_by_item_id.get(item.id, {})
+
+
+def _analysis_summary_from_items(
+    *,
+    items: list[AnalysisResultItem],
+    current_snapshot_hash: str | None,
+    values_by_item_id: dict[int, dict[str, object]],
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> dict[str, object]:
+    severity_order = ["critical", "high", "medium", "low", "info"]
+    action_priority_order = [
+        "before_signing",
+        "negotiate",
+        "clarify",
+        "monitor",
+        "expert_review",
+        "informational",
+    ]
+    severity_rank = {
+        severity: len(severity_order) - idx
+        for idx, severity in enumerate(severity_order)
+    }
+    action_rank = {
+        action: len(action_priority_order) - idx
+        for idx, action in enumerate(action_priority_order)
+    }
+
+    if not items:
+        return {
+            "overall_risk_level": "info",
+            "overall_display_label": "safe",
+            "total_findings": 0,
+            "critical_count": 0,
+            "high_count": 0,
+            "medium_count": 0,
+            "low_count": 0,
+            "info_count": 0,
+            "top_priorities": [],
+            "key_dates": [],
+            "key_amounts": [],
+            "key_obligations": [],
+            "missing_terms_count": 0,
+            "ambiguity_count": 0,
+            "expert_review_recommended": False,
+            "snapshot_version": None,
+            "snapshot_stale": False,
+        }
+
+    severities = [str(_analysis_value(item, values_by_item_id=values_by_item_id).get("severity", "info")) for item in items]
+    critical = sum(1 for severity in severities if severity == "critical")
+    high = sum(1 for severity in severities if severity == "high")
+    medium = sum(1 for severity in severities if severity == "medium")
+    low = sum(1 for severity in severities if severity == "low")
+    info = sum(1 for severity in severities if severity == "info")
+
+    if critical:
+        overall_risk = "critical"
+    elif high:
+        overall_risk = "high"
+    elif medium:
+        overall_risk = "medium"
+    elif low:
+        overall_risk = "low"
+    else:
+        overall_risk = "info"
+
+    total_status_count = critical + high + medium + low + info
+    if total_status_count != len(items):
+        raise ValueError("severity count does not match total findings.")
+
+    sorted_priorities = sorted(
+        items,
+        key=lambda item: (
+            severity_rank.get(
+                str(_analysis_value(item, values_by_item_id=values_by_item_id).get("severity", "info")),
+                0,
+            ),
+            action_rank.get(
+                str(_analysis_value(item, values_by_item_id=values_by_item_id).get("action_priority", "informational")),
+                0,
+            ),
+            str(item.id),
+        ),
+    )
+    top_priorities = [
+        {
+            "finding_id": str(
+                _analysis_value(item, values_by_item_id=values_by_item_id).get("finding_id") or item.id
+            ),
+            "severity": str(_analysis_value(item, values_by_item_id=values_by_item_id).get("severity", "info")),
+            "title": str(
+                _analysis_value(
+                    item, values_by_item_id=values_by_item_id
+                ).get("title")
+                or decrypt_clause_title(
+                    item.clause.title_encrypted,
+                    clause_id=item.clause.id,
+                    owner_id=owner_id,
+                    keyring=keyring,
+                )
+                or item.id
+            ),
+            "action_priority": str(_analysis_value(item, values_by_item_id=values_by_item_id).get("action_priority", "informational")),
+        }
+        for item in sorted_priorities[:3]
+    ]
+
+    key_dates: list[str] = []
+    key_amounts: list[str] = []
+    key_obligations: list[str] = []
+    missing_terms_count = 0
+    ambiguity_count = 0
+    for item in items:
+        value = _analysis_value(item, values_by_item_id=values_by_item_id)
+        for fact in value.get("extracted_facts", []):
+            if not isinstance(fact, dict):
+                continue
+            fact_type = str(fact.get("fact_type", ""))
+            status = str(fact.get("status", "")).strip().lower()
+            if status == "missing":
+                missing_terms_count += 1
+            elif status == "ambiguous":
+                ambiguity_count += 1
+
+            if fact_type in {"contract_start_date", "contract_end_date", "payment_date", "notice_deadline"}:
+                date_value = str(fact.get("date_value", "")).strip()
+                if date_value:
+                    key_dates.append(date_value)
+            if fact_type in {"payment_amount", "deposit", "penalty", "late_fee", "interest_rate"}:
+                amount_value = str(fact.get("amount_value", "")).strip()
+                if amount_value:
+                    currency = str(fact.get("currency", "")).strip() or "KRW"
+                    key_amounts.append(f"{amount_value} {currency}")
+            if fact_type == "obligation":
+                obligation_party = str(fact.get("obligation_party", "")).strip()
+                if obligation_party:
+                    label = str(fact.get("label", "")).strip()
+                    key_obligations.append(f"{obligation_party}: {label}".strip())
+
+    snapshot_versions = [
+        int(item.extra_data.get("snapshot_version"))
+        for item in items
+        if isinstance(item.extra_data, dict)
+        and isinstance(item.extra_data.get("snapshot_version"), int)
+    ]
+
+    return {
+        "overall_risk_level": overall_risk,
+        "overall_display_label": (
+            "warning" if overall_risk in {"critical", "high"} else "safe"
+        ),
+        "total_findings": len(items),
+        "critical_count": critical,
+        "high_count": high,
+        "medium_count": medium,
+        "low_count": low,
+        "info_count": info,
+        "top_priorities": top_priorities,
+        "key_dates": key_dates,
+        "key_amounts": key_amounts,
+        "key_obligations": key_obligations,
+        "missing_terms_count": missing_terms_count,
+        "ambiguity_count": ambiguity_count,
+        "expert_review_recommended": any(
+            item.expert_review_recommended for item in items
+        ),
+        "snapshot_version": max(snapshot_versions) if snapshot_versions else None,
+        "snapshot_stale": any(
+            _is_snapshot_stale(item=item, current_snapshot_hash=current_snapshot_hash)
+            for item in items
+        ),
+    }
+
+
+def _get_document_for_current_user(
+    *,
+    db: Session,
+    document_id: str,
+    current_user: User,
+) -> Document:
+    statement = (
+        select(Document)
+        .options(selectinload(Document.clauses))
+        .where(
+            Document.id == document_id,
+            Document.owner_id == current_user.id,
+        )
+    )
+    document = db.scalar(statement)
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+    return document
+
+def _is_snapshot_stale(
+    item: AnalysisResultItem,
+    current_snapshot_hash: str | None,
+) -> bool:
+    if current_snapshot_hash is None:
+        return False
+    if not isinstance(item.extra_data, dict):
+        return False
+    evidence_hash = item.extra_data.get("evidence_snapshot_hash")
+    return isinstance(evidence_hash, str) and evidence_hash != current_snapshot_hash
+
+
+def _serialize_analysis_result_item(
+    item: AnalysisResultItem,
+    *,
+    current_snapshot_hash: str | None,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+    values_by_item_id: dict[int, dict[str, object]],
+) -> dict[str, object]:
+    value = _analysis_value(item, values_by_item_id=values_by_item_id)
+    summary = _resolve_analysis_result_summary(
+        item,
+        owner_id=owner_id,
+        keyring=keyring,
+    )
+    return {
+        "clause_id": item.clause.clause_id,
+        "reference_id": item.reference_id,
+        "finding_id": item.id,
+        "display_label": item.display_label,
+        "summary": summary,
+        "expert_review_recommended": item.expert_review_recommended,
+        "severity": value.get("severity", "info"),
+        "title": value.get("title")
+        or decrypt_clause_title(
+            item.clause.title_encrypted,
+            clause_id=item.clause.id,
+            owner_id=owner_id,
+            keyring=keyring,
+        ),
+        "category": value.get("category"),
+        "risk_type": value.get("risk_type"),
+        "risk_reason": value.get("risk_reason"),
+        "practical_impact": value.get("practical_impact"),
+        "action_priority": value.get("action_priority"),
+        "questions_to_ask": value.get("questions_to_ask", []),
+        "negotiation_suggestions": value.get(
+            "negotiation_suggestions",
+            [],
+        ),
+        "recommendation": value.get("recommendation", summary),
+        "expert_review_reason_codes": value.get("expert_review_reason_codes", []),
+        "expert_review_summary": value.get("expert_review_summary", ""),
+        "evidence": value.get("evidence", []),
+        "extracted_facts": value.get("extracted_facts", []),
+        "validation_status": value.get("validation_status", "verified"),
+        "is_stale": _is_snapshot_stale(item, current_snapshot_hash),
+        "snapshot_version": (
+            item.extra_data.get("snapshot_version")
+            if isinstance(item.extra_data, dict)
+            else None
+        ),
+    }
+
+
+def _resolve_analysis_result_summary(
+    item: AnalysisResultItem,
+    *,
+    owner_id: str,
+    keyring: EncryptionKeyring,
+) -> str:
+    try:
+        return decrypt_analysis_result_summary(
+            item.summary_encrypted,
+            analysis_job_id=item.analysis_job_id,
+            clause_record_id=item.clause_record_id,
+            owner_id=owner_id,
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
+
+
+def _get_extraction_snapshot(
+    document_id: str,
+    db: Session,
+    current_user: User,
+    *,
+    keyring: EncryptionKeyring,
+) -> list[dict[str, object]]:
+    extraction = db.scalar(
+        select(Extraction).where(
+            Extraction.id == document_id,
+            Extraction.owner_id == current_user.id,
+        )
+    )
+    if extraction is None:
+        return []
+
+    extra_data = extraction.extra_data or {}
+    stored_snapshot = extra_data.get("confirmation_snapshot")
+    if not isinstance(stored_snapshot, list) or not stored_snapshot:
+        return []
+
+    try:
+        snapshot = decrypt_confirmation_snapshot(
+            stored_snapshot,
+            extraction_id=extraction.id,
+            owner_id=current_user.id,
+            snapshot_version=extra_data.get("snapshot_version"),
+            keyring=keyring,
+        )
+    except ScalarDecryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored encrypted data is unavailable.",
+        ) from exc
+
+    return [item for item in snapshot if isinstance(item, dict)]
+
+
+@router.post(
+    "/upload",
+    dependencies=[Depends(enforce_user_rate_limit("upload"))],
+)
+async def upload_document(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, object]:
+    filename = file.filename or ""
+    _validate_text_filename(filename)
+    if file.content_type not in ALLOWED_TEXT_CONTENT_TYPES:
+        raise _upload_error(
+            415,
+            "UNSUPPORTED_FILE_TYPE",
+            "The uploaded file content type is not supported.",
+        )
+
+    max_upload_bytes = min(get_boundary_config().max_upload_bytes, 1 * 1024 * 1024)
+    content = bytearray()
+    while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+        content.extend(chunk)
+        if len(content) > max_upload_bytes:
+            log_event(
+                logger=logging.getLogger("api"),
+                event="upload_rejected",
+                service="api",
+                status=413,
+                request_id=getattr(request.state, "request_id", None),
+                safe_error_code="UPLOAD_TOO_LARGE",
+                extra={"file_size": len(content), "content_type_category": "text"},
+            )
+            raise _upload_error(
+                413, "UPLOAD_TOO_LARGE", "The uploaded file is too large."
+            )
+
+    if not content:
+        raise _upload_error(400, "EMPTY_FILE", "The uploaded file is empty.")
+
+    try:
+        text = bytes(content).decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise _upload_error(
+            415, "UNSUPPORTED_FILE_TYPE", "The text file must use UTF-8 encoding."
+        ) from None
+    if "\x00" in text:
+        raise _upload_error(
+            400, "MALFORMED_DOCUMENT", "The text document is malformed."
+        )
+
+    document_id = str(uuid4())
+    clause_result = split_clauses(text, document_id)
+    keyring = get_encryption_keyring()
+    try:
+        filename_encrypted = encrypt_document_filename(
+            filename,
+            record_id=document_id,
+            owner_id=current_user.id,
+            keyring=keyring,
+        )
+        unclassified_sections = encrypt_unclassified_sections(
+            clause_result["unclassified_sections"],
+            document_id=document_id,
+            owner_id=current_user.id,
+            keyring=keyring,
+        )
+    except ScalarEncryptionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to prepare document content.",
+        ) from exc
+
+    document = Document(
+        id=document_id,
+        filename_encrypted=filename_encrypted,
+        owner_id=current_user.id,
+        content_type=file.content_type,
+        size_bytes=len(content),
+        character_count=len(text),
+        status="processed",
+        unclassified_sections=unclassified_sections,
+        document_warnings=clause_result["document_warnings"],
+    )
+
+    for clause_data in clause_result["clauses"]:
+        clause_id = str(uuid4())
+        body = str(clause_data["body"])
+        try:
+            title = clause_data["title"]
+            title_encrypted = encrypt_clause_title(
+                title,
+                clause_id=clause_id,
+                owner_id=current_user.id,
+                keyring=keyring,
+            )
+            body_encrypted = encrypt_clause_body(
+                body,
+                clause_id=clause_id,
+                owner_id=current_user.id,
+                keyring=keyring,
+            )
+        except ScalarEncryptionError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to prepare document content.",
+            ) from exc
+        document.clauses.append(
+            Clause(
+                id=clause_id,
+                clause_id=clause_data["clause_id"],
+                reference_id=clause_data["reference_id"],
+                source_hash=clause_data["source_hash"],
+                ordinal=clause_data["ordinal"],
+                marker=clause_data["marker"],
+                clause_type=clause_data["clause_type"],
+                title_encrypted=title_encrypted,
+                body_encrypted=body_encrypted,
+                warnings=clause_data["warnings"],
+            )
+        )
+
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    log_event(
+        logger=logging.getLogger("api"),
+        event="upload_completed",
+        service="api",
+        status=200,
+        request_id=getattr(request.state, "request_id", None),
+        extra={"file_size": len(content), "content_type_category": "text"},
+    )
+
+    return _serialize_document(document, keyring=keyring)
+
+
+@router.get("/{document_id}")
+def get_document(
+    document_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, object]:
+    document = _get_document_for_current_user(
+        db=db,
+        document_id=document_id,
+        current_user=current_user,
+    )
+    keyring = get_encryption_keyring()
+    return _serialize_document(document, keyring=keyring)
+
+
+@router.get("/{document_id}/analysis-results")
+def get_analysis_results(
+    document_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, object]:
+    _get_document_for_current_user(
+        db=db,
+        document_id=document_id,
+        current_user=current_user,
+    )
+
+    statement = (
+        select(AnalysisJob)
+        .join(Document)
+        .options(
+            selectinload(AnalysisJob.result_items).selectinload(
+                AnalysisResultItem.clause
+            )
+        )
+        .where(
+            AnalysisJob.document_id == document_id,
+            Document.owner_id == current_user.id,
+        )
+        .order_by(AnalysisJob.created_at.desc())
+    )
+    job = db.scalars(statement).first()
+
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Analysis result not found.",
+        )
+
+    keyring = get_encryption_keyring()
+    extraction = db.scalar(
+        select(Extraction).where(
+            Extraction.id == document_id,
+            Extraction.owner_id == current_user.id,
+        )
+    )
+    snapshot = _get_extraction_snapshot(
+        document_id,
+        db=db,
+        current_user=current_user,
+        keyring=keyring,
+    )
+    current_snapshot_hash: str | None = (
+        _snapshot_hash(snapshot) if snapshot else None
+    )
+    extraction_snapshot_version = None
+    if extraction is not None:
+        extraction_snapshot_version = (extraction.extra_data or {}).get(
+            "snapshot_version"
+        )
+
+    items = sorted(
+        job.result_items,
+        key=lambda item: item.clause.ordinal,
+    )
+
+    values_by_item_id = _decrypt_analysis_values(
+        items,
+        owner_id=current_user.id,
+        keyring=keyring,
+    )
+    item_payloads = [
+        _serialize_analysis_result_item(
+            item=item,
+            current_snapshot_hash=current_snapshot_hash,
+            owner_id=current_user.id,
+            keyring=keyring,
+            values_by_item_id=values_by_item_id,
+        )
+        for item in items
+    ]
+    analysis_summary = _analysis_summary_from_items(
+        items=items,
+        current_snapshot_hash=current_snapshot_hash,
+        values_by_item_id=values_by_item_id,
+        owner_id=current_user.id,
+        keyring=keyring,
+    )
+
+    return {
+        "document_id": document_id,
+        "job_id": job.id,
+        "status": job.status,
+        "snapshot_version": extraction_snapshot_version,
+        "snapshot_stale": analysis_summary["snapshot_stale"],
+        "analysis_summary": analysis_summary,
+        "items": item_payloads,
+        "findings": item_payloads,
+    }

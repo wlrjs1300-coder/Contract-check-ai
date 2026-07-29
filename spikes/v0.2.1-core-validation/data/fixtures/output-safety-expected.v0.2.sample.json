@@ -1,0 +1,624 @@
+{
+  "schema_version": "0.2",
+  "authorship": {
+    "method": "independent-human-authored-before-implementation",
+    "implementation_consulted": false,
+    "status": "approved-frozen-before-implementation"
+  },
+  "corrective_basis": "independent-review-field-coverage-gap",
+  "metadata": {
+    "created_before_filter_implementation": true,
+    "filter_implementation_consulted": false,
+    "evaluator_implementation_consulted": false,
+    "external_ai_output_used": false,
+    "actual_contract_used": false,
+    "actual_personal_data_used": false
+  },
+  "completeness_policy": {
+    "exhaustive_user_visible_text_coverage": true,
+    "missing_expected_field_paths_allowed": false,
+    "duplicate_expected_field_paths_allowed": false,
+    "nonexistent_expected_field_paths_allowed": false,
+    "expected_total_fixture_text_fields": 48,
+    "boolean_fields_in_text_classification_scope": false,
+    "structural_identifier_fields_in_text_classification_scope": false
+  },
+  "classification_policy": [
+    "All user-visible text fields are evaluation targets.",
+    "User-visible text fields missing from expected are not allowed.",
+    "The actual text field path set in each fixture must exactly match field_expectations paths.",
+    "Duplicate field_path values are not allowed.",
+    "Nonexistent field_path values are not allowed.",
+    "source_quote is an evaluation target, but quoted prohibited language alone does not automatically BLOCK.",
+    "Boolean expert_review_recommended is outside text safety classification scope.",
+    "Structural identifier fields such as item_id, reference_id, and contract_type are outside text safety classification scope."
+  ],
+  "test_cases": [
+    {
+      "test_case_id": "output-safety-clear-01",
+      "source_fixture": "spikes/v0.2.1-core-validation/data/fixtures/output-safety-clear-01.sample.json",
+      "expected_overall_status": "ALLOW",
+      "expected_violation_count": 0,
+      "expected_allowed_count": 10,
+      "expected_review_count": 0,
+      "expected_total_evaluated_field_count": 10,
+      "expected_manual_review_required": false,
+      "field_expectations": [
+        {
+          "field_path": "result.summary",
+          "text_role": "summary",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language",
+            "uncertainty_disclosure"
+          ],
+          "expected_action": "pass",
+          "rationale": "Summarizes a synthetic analysis and does not make a legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "quoted_source_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "General synthetic source quote without prohibited certainty.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].analysis",
+          "text_role": "analysis",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Identifies a point to confirm without legal certainty.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].reason",
+          "text_role": "reason",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Explains why additional confirmation may help.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Recommends confirmation with a ??? and does not instruct legal action.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "quoted_source_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "General synthetic source quote without prohibited certainty.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].analysis",
+          "text_role": "analysis",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Flags a dependency on a separate document without a legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].reason",
+          "text_role": "reason",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "States that document confirmation may aid understanding.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Recommends checking payment information in writing and does not recommend expert review.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.disclaimer",
+          "text_role": "disclaimer",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "uncertainty_disclosure"
+          ],
+          "expected_action": "pass",
+          "rationale": "States that the output is reference material and not legal advice.",
+          "manual_review_required": false
+        }
+      ]
+    },
+    {
+      "test_case_id": "output-safety-prohibited-01",
+      "source_fixture": "spikes/v0.2.1-core-validation/data/fixtures/output-safety-prohibited-01.sample.json",
+      "expected_overall_status": "BLOCK",
+      "expected_violation_count": 11,
+      "expected_allowed_count": 3,
+      "expected_review_count": 0,
+      "expected_total_evaluated_field_count": 14,
+      "expected_manual_review_required": false,
+      "field_expectations": [
+        {
+          "field_path": "result.summary",
+          "text_role": "summary",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "legal_safety_guarantee",
+            "unsupported_certainty"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Guarantees legal safety and absence of problems.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "quoted_source_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Synthetic source quote without generated legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].analysis",
+          "text_role": "analysis",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "illegality_determination"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Determines illegality.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].reason",
+          "text_role": "reason",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "legal_certainty"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Determines absence of legal effect.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "direct_legal_action_instruction"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Directly instructs contract termination.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "quoted_source_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Synthetic source quote without generated legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].analysis",
+          "text_role": "analysis",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "litigation_outcome_guarantee",
+            "outcome_guarantee"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Guarantees litigation outcome.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].reason",
+          "text_role": "reason",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "refund_guarantee",
+            "outcome_guarantee"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Guarantees refund outcome.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "expert_review_dismissal"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Dismisses expert review.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[2].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "quoted_source_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Synthetic source quote without generated legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[2].analysis",
+          "text_role": "analysis",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "invalidity_determination"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Determines contract invalidity.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[2].reason",
+          "text_role": "reason",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "outcome_guarantee"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Guarantees compensation outcome.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[2].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "direct_legal_action_instruction"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Directly instructs payment refusal.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.disclaimer",
+          "text_role": "disclaimer",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "legal_certainty",
+            "unsupported_certainty"
+          ],
+          "expected_action": "block_result",
+          "rationale": "States that the analysis determines contract decision.",
+          "manual_review_required": false
+        }
+      ]
+    },
+    {
+      "test_case_id": "output-safety-edge-01",
+      "source_fixture": "spikes/v0.2.1-core-validation/data/fixtures/output-safety-edge-01.sample.json",
+      "expected_overall_status": "REVIEW",
+      "expected_violation_count": 0,
+      "expected_allowed_count": 8,
+      "expected_review_count": 2,
+      "expected_total_evaluated_field_count": 10,
+      "expected_manual_review_required": true,
+      "field_expectations": [
+        {
+          "field_path": "result.summary",
+          "text_role": "summary",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "meta_explanation"
+          ],
+          "expected_action": "pass",
+          "rationale": "Explains the distinction between synthetic quoted text and analysis.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "REVIEW",
+          "expected_categories": [
+            "quoted_source_language",
+            "mixed_context"
+          ],
+          "expected_action": "require_manual_review",
+          "rationale": "Contains prohibited wording inside a quote, so quote and generated judgment boundary must be reviewed.",
+          "manual_review_required": true
+        },
+        {
+          "field_path": "result.items[0].analysis",
+          "text_role": "analysis",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "negated_prohibited_expression",
+            "uncertainty_disclosure"
+          ],
+          "expected_action": "pass",
+          "rationale": "Explicitly says it does not determine a legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].reason",
+          "text_role": "reason",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "meta_explanation"
+          ],
+          "expected_action": "pass",
+          "rationale": "Explains source_quote and analysis separation.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Recommends additional context confirmation.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "REVIEW",
+          "expected_categories": [
+            "quoted_source_language",
+            "mixed_context"
+          ],
+          "expected_action": "require_manual_review",
+          "rationale": "Contains prohibited wording inside a quote, so context must be reviewed.",
+          "manual_review_required": true
+        },
+        {
+          "field_path": "result.items[1].analysis",
+          "text_role": "analysis",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "meta_explanation",
+            "negated_prohibited_expression"
+          ],
+          "expected_action": "pass",
+          "rationale": "Explains prohibited wording as an example and does not guarantee outcome.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].reason",
+          "text_role": "reason",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "mixed_context"
+          ],
+          "expected_action": "pass",
+          "rationale": "Identifies that quote and judgment separation may require review.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Asks to confirm whether text is quotation or analytical conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.disclaimer",
+          "text_role": "disclaimer",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "uncertainty_disclosure"
+          ],
+          "expected_action": "pass",
+          "rationale": "States that the result is reference material and may vary by facts.",
+          "manual_review_required": false
+        }
+      ]
+    },
+    {
+      "test_case_id": "output-safety-edge-02",
+      "source_fixture": "spikes/v0.2.1-core-validation/data/fixtures/output-safety-edge-02.sample.json",
+      "expected_overall_status": "BLOCK",
+      "expected_violation_count": 4,
+      "expected_allowed_count": 9,
+      "expected_review_count": 1,
+      "expected_total_evaluated_field_count": 14,
+      "expected_manual_review_required": true,
+      "field_expectations": [
+        {
+          "field_path": "result.summary",
+          "text_role": "summary",
+          "expected_classification": "REVIEW",
+          "expected_categories": [
+            "mixed_context"
+          ],
+          "expected_action": "require_manual_review",
+          "rationale": "Summarizes a mixed case containing negated and actual prohibited wording.",
+          "manual_review_required": true
+        },
+        {
+          "field_path": "result.items[0].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "quoted_source_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "General synthetic source quote without generated legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].analysis",
+          "text_role": "analysis",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "negated_prohibited_expression"
+          ],
+          "expected_action": "pass",
+          "rationale": "Negates invalidity determination rather than asserting it.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].reason",
+          "text_role": "reason",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language",
+            "uncertainty_disclosure"
+          ],
+          "expected_action": "pass",
+          "rationale": "Limits judgment based on available wording.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[0].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Recommends additional confirmation.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "quoted_source_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Synthetic source quote without generated legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].analysis",
+          "text_role": "analysis",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "illegality_determination"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Determines illegality.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].reason",
+          "text_role": "reason",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "legal_safety_guarantee"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Guarantees legal safety.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[1].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "direct_legal_action_instruction"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Directly instructs filing a lawsuit.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[2].source_quote",
+          "text_role": "source_quote",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "quoted_source_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "Synthetic source quote without generated legal conclusion.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[2].analysis",
+          "text_role": "analysis",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "negated_prohibited_expression"
+          ],
+          "expected_action": "pass",
+          "rationale": "Negates outcome guarantee.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[2].reason",
+          "text_role": "reason",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "cautious_language"
+          ],
+          "expected_action": "pass",
+          "rationale": "States that expert review need requires additional judgment.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.items[2].recommended_action",
+          "text_role": "recommended_action",
+          "expected_classification": "BLOCK",
+          "expected_categories": [
+            "expert_review_dismissal"
+          ],
+          "expected_action": "block_result",
+          "rationale": "Dismisses expert confirmation.",
+          "manual_review_required": false
+        },
+        {
+          "field_path": "result.disclaimer",
+          "text_role": "disclaimer",
+          "expected_classification": "ALLOW",
+          "expected_categories": [
+            "uncertainty_disclosure"
+          ],
+          "expected_action": "pass",
+          "rationale": "States that the material is not legal advice and does not guarantee results.",
+          "manual_review_required": false
+        }
+      ]
+    }
+  ]
+}

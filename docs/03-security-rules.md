@@ -31,6 +31,8 @@ ContractCheck AI는 계약서 파일을 다루는 프로젝트이므로, 개인�
 
 위 항목은 파일 내용뿐 아니라 커밋 메시지, PR 제목, PR 본문, PR 댓글, 터미널 출력, 스크린샷에도 포함하지 않는다.
 
+API Key, Secret, Token, Password 등 credential류는 `docs/security/data-classification.md` 기준 D1 등급에 해당한다. 이 등급 참조는 위 절대 커밋 금지 목록을 대체하지 않으며, 목록은 그대로 유지한다.
+
 ## 3. 계약서 파일 처리 원칙
 
 - 원본 계약서는 분석 중 임시 저장만 허용한다.
@@ -55,6 +57,25 @@ MVP 단계의 주요 마스킹 대상은 다음과 같다.
 | 주민등록번호 | 900101-1234567 | [RRN_1] |
 | 계좌번호 | 000-0000-0000 | [ACCOUNT_1] |
 | 사업자등록번호 | 000-00-00000 | [BIZ_NO_1] |
+
+v0.2.1 PR-3 synthetic PII masking spike uses the following deterministic taxonomy and token prefixes:
+
+| entity_type | token |
+|---|---|
+| `person` | `[PERSON_n]` |
+| `phone` | `[PHONE_n]` |
+| `email` | `[EMAIL_n]` |
+| `address` | `[ADDRESS_n]` |
+| `date_of_birth` | `[BIRTH_n]` |
+| `national_id_number` | `[RRN_n]` |
+| `business_registration_number` | `[BIZ_NO_n]` |
+| `account_number` | `[ACCOUNT_n]` |
+
+PR-3 is limited to local synthetic fixture validation. It does not approve real personal data handling, real contract processing, external AI transfer, or production service release.
+
+Detected raw personal data values must not be stored in result fields, logs, reports, terminal output, PR text, or screenshots. Result objects must not include `text`, `raw_text`, `value`, `source_value`, or `matched_text` fields for detected entities.
+
+Masked output files, including optional `--output` results from local spike scripts, still require separate storage, retention, deletion, and access-control design before any real data use.
 
 ## 5. 로그 보안 규칙
 

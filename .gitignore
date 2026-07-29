@@ -24,6 +24,7 @@ node_modules/
 dist/
 build/
 .vite/
+coverage/
 
 # python/backend
 .venv/
@@ -64,6 +65,18 @@ reports/
 exports/
 downloads/
 
+# spike generated data and raw outputs
+spikes/**/data/generated/
+spikes/**/outputs/raw/
+spikes/**/outputs/summary/
+spikes/**/.env
+spikes/**/*.local.*
+!spikes/**/data/
+!spikes/**/data/fixtures/
+!spikes/**/data/fixtures/*.sample.*
+!spikes/**/reports/
+!spikes/**/reports/*.md
+
 # private working notes
 private-docs/
 raw-notes/
@@ -76,3 +89,6 @@ scratch/
 .idea/
 .DS_Store
 Thumbs.db
+
+# allow backend dependency file
+!backend/requirements.txt
