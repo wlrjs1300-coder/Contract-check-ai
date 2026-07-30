@@ -56,6 +56,11 @@ def test_extra_cannot_override_core_or_emit_sensitive_values(caplog) -> None:
         "email": "person@example.invalid",
         "filename": "private-contract.pdf",
         "request_body": "raw contract",
+        "x-forwarded-for": "203.0.113.9, 192.0.2.10",
+        "x-forwarded-proto": "https",
+        "forwarded": "for=203.0.113.9;proto=https",
+        "client_ip": "203.0.113.9",
+        "peer_ip": "192.0.2.10",
     }
     payload = _payload(
         caplog,

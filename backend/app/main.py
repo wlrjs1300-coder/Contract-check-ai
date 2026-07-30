@@ -20,6 +20,12 @@ from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.core.email_lookup import get_email_lookup_key
 from backend.app.core.logging import configure_logging, log_event
 from backend.app.core.operations_config import validate_runtime_configuration
+from backend.app.core.proxy_config import get_proxy_config
+from backend.app.core.request_context import (
+    build_client_context,
+    is_loopback_peer,
+    normalized_host,
+)
 from backend.app.services.extraction_orphan_cleanup import OrphanCleanupError, sweep_orphan_request_directories
 from backend.app.services.readiness import ReadinessError, get_readiness_status
 
@@ -114,6 +120,47 @@ async def request_logging_middleware(request: Request, call_next):
     start = time.perf_counter()
 
     logger = logging.getLogger("api")
+    proxy_config = get_proxy_config(enforce_production=False)
+    client_context = build_client_context(request, proxy_config)
+    request.state.client_context = client_context
+    internal_health_request = (
+        request.url.path in {"/health", "/ready"}
+        and is_loopback_peer(client_context)
+        and not client_context.forwarded_used
+    )
+
+    if not internal_health_request:
+        host = normalized_host(request)
+        if proxy_config.allowed_hosts and host not in proxy_config.allowed_hosts:
+            log_event(
+                logger=logger,
+                event="ingress_rejected",
+                service="api",
+                status=400,
+                request_id=request_id,
+                safe_error_code="INVALID_REQUEST_HOST",
+            )
+            response = JSONResponse(
+                status_code=400,
+                content={"detail": "Invalid request host."},
+            )
+            response.headers[_REQUEST_ID_HEADER] = request_id
+            return response
+        if proxy_config.require_https and client_context.scheme != "https":
+            log_event(
+                logger=logger,
+                event="ingress_rejected",
+                service="api",
+                status=426,
+                request_id=request_id,
+                safe_error_code="HTTPS_REQUIRED",
+            )
+            response = JSONResponse(
+                status_code=426,
+                content={"detail": "HTTPS is required."},
+            )
+            response.headers[_REQUEST_ID_HEADER] = request_id
+            return response
 
     try:
         response = await call_next(request)

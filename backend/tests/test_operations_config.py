@@ -38,6 +38,10 @@ def _production_env(monkeypatch) -> dict[str, str]:
         "RATE_LIMIT_EXTRACTION": "20",
         "RATE_LIMIT_ANALYSIS_JOB": "10",
         "RATE_LIMIT_WINDOW_SECONDS": "60",
+        "TRUST_PROXY_HEADERS": "false",
+        "TRUSTED_PROXY_CIDRS": "",
+        "REQUIRE_HTTPS": "true",
+        "ALLOWED_HOSTS": "contracts.example.invalid",
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
@@ -68,6 +72,9 @@ def _production_env(monkeypatch) -> dict[str, str]:
         ("CORS_ALLOWED_ORIGINS", "http://127.0.0.1:5173", "invalid_cors_config"),
         ("DEBUG", "true", "invalid_debug_config"),
         ("UVICORN_RELOAD", "true", "invalid_debug_config"),
+        ("REQUIRE_HTTPS", "false", "invalid_proxy_config"),
+        ("ALLOWED_HOSTS", "*", "invalid_proxy_config"),
+        ("TRUST_PROXY_HEADERS", "maybe-private-setting", "invalid_proxy_config"),
     ],
 )
 def test_production_rejects_unsafe_configuration(

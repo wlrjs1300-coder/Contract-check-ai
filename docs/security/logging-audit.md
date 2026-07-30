@@ -24,8 +24,8 @@ Concrete log retention periods, log collection systems, alert thresholds, roles,
 
 - 공통 필드: timestamp, level, logger, event, service, status, request_id
 - 선택 필드: job_id, worker_id, attempt_count, duration_ms, safe_error_code
-- 현재 event: `http_request_completed`, `upload_rejected`, `upload_completed`, `extraction_rejected`, `temporary_cleanup_failed`, `rate_limit_exceeded`, `analysis_worker_started`, `analysis_worker_stopped`, `analysis_job_finished`, `analysis_job_failure`
-- 민감 extra key 차단: authorization, cookie, JWT/token, password/secret/API key, DB URL, ciphertext/nonce, encryption/HMAC key, request·response body, Provider request·response, clause body, evidence, summary, email, filename
+- 현재 event: `http_request_completed`, `ingress_rejected`, `upload_rejected`, `upload_completed`, `extraction_rejected`, `temporary_cleanup_failed`, `rate_limit_exceeded`, `analysis_worker_started`, `analysis_worker_stopped`, `analysis_job_finished`, `analysis_job_failure`
+- 민감 extra key 차단: authorization, cookie, JWT/token, password/secret/API key, DB URL, ciphertext/nonce, encryption/HMAC key, request·response body, Provider request·response, clause body, evidence, summary, email, filename, raw forwarded header·chain, peer/client IP, Host
 - 문자열 identifier는 허용 문자와 최대 길이로 정규화하며 worker 실패는 raw exception 대신 저장된 safe error code를 사용한다.
 
 관련 structured logging 테스트는 core field, 민감 extra key 비노출과 worker의 안전한 실패 로그를 검증한다. 이 구현은 L1 operational log의 일부이며 아래 설계의 L2 audit log나 L3 security event log 전체를 구현한 것으로 간주하지 않는다.
@@ -40,6 +40,8 @@ Concrete log retention periods, log collection systems, alert thresholds, roles,
 - 지표, 경보 threshold, on-call과 incident response 연동
 
 현재 HTTP middleware가 401·403·404 상태를 operational request event로 기록할 수 있어도 이를 인증 실패 또는 권한 거부 감사 이벤트로 확대 해석하지 않는다. 이 상태 갱신은 production 또는 실제 계약서·개인정보 사용 승인을 의미하지 않는다.
+
+Forwarded metadata는 승인된 proxy 경계에서 scheme과 공개 rate-limit용 보조 client context를 계산하는 데만 사용한다. raw `Forwarded`·`X-Forwarded-*`, 전체 IP chain과 IP 원문을 operational/audit/security log에 기록하지 않으며 사용자 인증·권한 identity로 취급하지 않는다.
 
 ## 1. 문서 목적
 
