@@ -10,6 +10,7 @@ from typing import Any
 _UNSAFE_LOG_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _SENSITIVE_EXTRA_KEYS = {
     "authorization", "cookie", "jwt", "token", "password", "secret", "api_key",
+    "access_token", "refresh_token", "credential", "private_key", "key_material",
     "database_url", "db_url", "ciphertext", "nonce", "encryption_key", "hmac_key",
     "request_body", "response_body", "provider_request", "provider_response",
     "clause_body", "evidence", "summary", "email", "filename",
