@@ -73,6 +73,10 @@
       RATE_LIMIT_EXTRACTION: ${RATE_LIMIT_EXTRACTION:?required}
       RATE_LIMIT_ANALYSIS_JOB: ${RATE_LIMIT_ANALYSIS_JOB:?required}
       RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:?required}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:?required}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      REQUIRE_HTTPS: ${REQUIRE_HTTPS:?required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?required}
     ports:
       - "8000:8000"
     command:
@@ -86,6 +90,7 @@
       - "8000"
       - --timeout-graceful-shutdown
       - "30"
+      - --no-proxy-headers
     healthcheck:
       test:
         - CMD

@@ -13,6 +13,8 @@ _SENSITIVE_EXTRA_KEYS = {
     "database_url", "db_url", "ciphertext", "nonce", "encryption_key", "hmac_key",
     "request_body", "response_body", "provider_request", "provider_response",
     "clause_body", "evidence", "summary", "email", "filename",
+    "forwarded", "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host",
+    "forwarded_chain", "client_ip", "peer_ip", "host",
 }
 _CORE_FIELDS = {
     "timestamp", "level", "logger", "event", "service", "status", "request_id",

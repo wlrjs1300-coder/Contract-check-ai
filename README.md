@@ -110,7 +110,7 @@ cd Contract-check-ai
 ```powershell
 python -m venv backend\.venv
 .\backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-.\backend\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+.\backend\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --no-proxy-headers --host 127.0.0.1 --port 8000
 ```
 
 기본 실행은 저장소 루트에 Git 비추적 SQLite 파일 `contract_check.db`를 생성할 수 있습니다.
@@ -142,6 +142,8 @@ Backend startup에는 최소한 `JWT_SECRET`, `DATA_ENCRYPTION_KEYS_JSON`, `DATA
 | Secret | `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID` | 저장 암호화 keyring | Backend 전용 저장·주입 |
 | Secret | `JWT_SECRET`, `EMAIL_LOOKUP_HMAC_KEY` | JWT 서명과 email lookup | 서로 독립된 강한 값 사용 |
 | 공개 운영 설정 | `CORS_ALLOWED_ORIGINS`, `ANALYSIS_PROVIDER` | 허용 origin과 Provider 모드 | 명시값 필수, wildcard와 synthetic/fake Provider 금지 |
+| API ingress 설정 | `TRUST_PROXY_HEADERS`, `TRUSTED_PROXY_CIDRS` | API forwarded metadata 신뢰 경계 | 기본 불신, wildcard 금지, Uvicorn proxy 처리 비활성화 |
+| API ingress 설정 | `REQUIRE_HTTPS`, `ALLOWED_HOSTS` | API HTTPS와 Host 검증 | production API에서 HTTPS와 명시 Host 필수 |
 | 경계 설정 | `MAX_UPLOAD_BYTES`, `MAX_EXTRACTED_CHARACTERS`, `MAX_DOCUMENT_PAGES` | 업로드·추출 상한 | Compose에서 명시 |
 | 경계 설정 | `RATE_LIMIT_LOGIN`, `RATE_LIMIT_REGISTER`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_EXTRACTION`, `RATE_LIMIT_ANALYSIS_JOB`, `RATE_LIMIT_WINDOW_SECONDS` | 프로세스 단위 요청 제한 | Compose에서 명시 |
 | DB 컨테이너 | `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | MySQL 초기화 | password는 Secret, API에 노출 금지 |
@@ -197,7 +199,7 @@ npm.cmd run build
 
 현재 분석 UI의 직접 업로드 흐름은 UTF-8 TXT 한 파일을 최대 1 MiB까지 처리합니다. Backend extraction API에는 텍스트 PDF, 이미지 OCR과 스캔 PDF 처리·확인 흐름이 존재하지만 모든 형식이 동일한 Frontend 사용자 흐름으로 통합된 것은 아닙니다.
 
-개발 기본 실행은 SQLite를 사용할 수 있습니다. production runtime은 SQLite를 거부하며 Compose는 MySQL 8.4, Alembic migration one-shot, API와 worker 분리를 사용합니다. 로컬 Docker/MySQL synthetic smoke는 완료됐지만 HTTPS/TLS와 trusted proxy, 외부 Secret 저장소, backup/restore 운영 절차, 외부 observability와 실제 배포 플랫폼은 아직 미완료 또는 미확정입니다.
+개발 기본 실행은 SQLite를 사용할 수 있습니다. production runtime은 SQLite를 거부하며 Compose는 MySQL 8.4, Alembic migration one-shot, API와 worker 분리를 사용합니다. Forwarded header는 기본적으로 신뢰하지 않고 명시된 proxy CIDR에서만 제한적으로 해석하며 production은 HTTPS와 Host 검증을 요구합니다. 로컬 Docker/MySQL synthetic smoke는 완료됐지만 실제 TLS 종단과 proxy 배치 검증, 외부 Secret 저장소, backup/restore 운영 절차, 외부 observability와 실제 배포 플랫폼은 아직 미완료 또는 미확정입니다.
 
 JWT 인증, 사용자별 ownership과 저장 암호화가 구현됐더라도 실제 계약서나 실제 개인정보 사용이 승인된 것은 아닙니다. 실제 외부 Provider adapter도 연결되지 않았습니다. Provider 전달 전 마스킹과 출력 검증은 규칙 기반 기술 검증이며 모든 개인정보나 위험 조항 탐지를 보장하지 않습니다. 별도 보안·개인정보 검토 전에는 명백한 합성 데이터만 사용합니다.
 

@@ -26,7 +26,7 @@
 ## 현재 미완료 또는 미확정 범위
 
 - 실제 배포 플랫폼, 운영 주소와 조직별 운영 책임
-- HTTPS/TLS 종단, HTTP 차단과 trusted proxy 경계
+- 실제 HTTPS/TLS 종단, proxy 배치와 network 접근 통제 검증
 - 외부 Secret 저장소, 접근 검토, 교체·폐기·복구 절차
 - MySQL backup·restore, 보존·폐기와 복구 rehearsal
 - audit/security event 체계, 외부 로그 수집, 지표·경보와 보존
@@ -47,6 +47,8 @@
 - debug와 reload control이 활성화되지 않을 것
 - synthetic/fake/default placeholder가 아닌 허용된 Provider 상태일 것
 - 업로드·추출·페이지·rate limit 경계값이 모두 명시되고 허용 범위 안일 것
+- `REQUIRE_HTTPS=true`이고 `ALLOWED_HOSTS`가 명시될 것
+- proxy header 신뢰를 켜면 wildcard가 아닌 `TRUSTED_PROXY_CIDRS`가 존재할 것
 
 현재 production validation이 통과할 수 있다는 사실은 실제 Provider가 연결되거나 production 배포가 승인됐다는 뜻이 아니다.
 
@@ -65,6 +67,10 @@
 | lookup Secret | `EMAIL_LOOKUP_HMAC_KEY` | API, worker, migrate | 암호화 key와 분리 |
 | 공개 운영 설정 | `CORS_ALLOWED_ORIGINS` | API, migrate | 실제 HTTPS Frontend origin만 허용 |
 | Provider 설정 | `ANALYSIS_PROVIDER` | API, worker, migrate | production에서 synthetic/fake 차단 |
+| ingress 설정 | `TRUST_PROXY_HEADERS` | API | 기본 불신, production 명시값 필수 |
+| ingress 설정 | `TRUSTED_PROXY_CIDRS` | API | 신뢰 활성화 시 IP/CIDR 필수, wildcard 금지 |
+| ingress 설정 | `REQUIRE_HTTPS` | API | production에서 `true` 필수 |
+| ingress 설정 | `ALLOWED_HOSTS` | API | 명시 Host allowlist, wildcard 금지 |
 | 입력 경계 | `MAX_UPLOAD_BYTES`, `MAX_EXTRACTED_CHARACTERS`, `MAX_DOCUMENT_PAGES` | API, worker, migrate | 허용 상한 안의 명시값 |
 | 요청 제한 | `RATE_LIMIT_LOGIN`, `RATE_LIMIT_REGISTER`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_EXTRACTION`, `RATE_LIMIT_ANALYSIS_JOB`, `RATE_LIMIT_WINDOW_SECONDS` | API, worker, migrate | 현재 limiter는 프로세스 단위 |
 
@@ -108,15 +114,20 @@ DB health 또는 migration이 실패하면 API와 worker를 시작하지 않는�
 
 ## HTTPS, reverse proxy와 CORS
 
-현재 저장소에는 TLS 종단이나 명시적 trusted proxy 정책이 없다. 배포 후보는 후속 PR에서 다음을 검증하기 전 외부 노출하지 않는다.
+애플리케이션의 플랫폼 중립 ingress 계약은 다음과 같다.
 
-- Frontend와 API의 HTTPS 및 HTTP 차단 또는 redirect 책임
-- 신뢰할 proxy hop과 forwarded header 허용 범위
-- client가 전달 header로 scheme·주소·로그 metadata를 위조하지 못하는지
-- 실제 Frontend HTTPS origin만 포함한 `CORS_ALLOWED_ORIGINS`
-- proxy와 플랫폼의 request body limit이 애플리케이션 경계를 우회하지 않는지
+- Compose는 Uvicorn의 proxy header 처리를 `--no-proxy-headers`로 비활성화한다. 원래 연결 peer를 보존해 애플리케이션 trust 판단과 중복되지 않게 한다.
+- `TRUST_PROXY_HEADERS=false`가 기본 정책이다. 이때 `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`와 표준 `Forwarded`는 scheme, client context와 Host 판정에 영향을 주지 않는다.
+- 신뢰를 활성화하면 peer가 `TRUSTED_PROXY_CIDRS` 중 하나에 포함될 때만 `X-Forwarded-For`와 `X-Forwarded-Proto`를 해석한다. wildcard, 빈 항목, malformed IP/CIDR은 거부한다.
+- forwarded chain은 512자와 8 hop으로 제한한다. 오른쪽에서 왼쪽으로 신뢰 proxy를 건너뛴 첫 주소를 rate-limit용 보조 client context로 사용하며 malformed chain은 전체를 무시한다.
+- `X-Forwarded-Host`는 신뢰 여부와 관계없이 사용하지 않는다. Host는 직접 `Host` header를 `ALLOWED_HOSTS`와 비교하고 wildcard를 허용하지 않는다. CORS origin allowlist와 Host allowlist는 별개다.
+- `REQUIRE_HTTPS=true`이면 직접 TLS scheme 또는 신뢰 proxy의 `X-Forwarded-Proto: https`만 인정한다. 그 외 요청은 method/body를 다른 위치로 보내지 않도록 redirect하지 않고 426으로 거부한다.
+- Compose의 container-local `/health`와 `/ready` 호출은 forwarded metadata를 사용하지 않는 loopback direct HTTP 호출에 한해 HTTPS·Host 검사 예외다. 다른 endpoint, 비-loopback 요청과 forwarded metadata를 사용한 요청에는 예외가 없다.
+- client context는 공개 rate-limit bucket의 보조값일 뿐 인증·인가나 사용자 identity로 사용하지 않는다.
 
-CORS는 인증·인가를 대체하지 않는다. 특정 reverse proxy나 hosting 제품은 아직 선정하지 않는다.
+실제 TLS 인증서, 종단 위치, proxy CIDR과 network 접근 통제는 배포 환경에서 별도 확정·검증해야 한다. proxy는 외부에서 기존 forwarded header를 제거하고 검증된 값만 설정해야 한다. 실제 Frontend HTTPS origin의 CORS와 proxy/platform request body limit도 함께 검증한다. 특정 reverse proxy나 hosting 제품은 선정하지 않는다.
+
+Compose 외 방식으로 Uvicorn을 실행할 때도 `--no-proxy-headers`를 명시해야 한다. 현재 Dockerfile 기본 CMD를 직접 사용하는 배포는 이 옵션을 포함하도록 실행 명령을 override하지 않으면 승인된 ingress 계약으로 간주하지 않는다.
 
 ## DB, migration과 복구
 
@@ -132,7 +143,7 @@ MySQL 연결과 migration 실행 기반은 구현됐지만 backup/restore 운영
 
 ## 로그와 관측성
 
-현재 구현은 JSON structured operational log와 request correlation을 제공한다. HTTP 완료, upload 완료·거부, extraction 거부, temp cleanup 실패, rate limit 차단, worker 시작·종료·job 완료·실패가 현재 확인된 이벤트다. 민감 extra key를 거부하고 문자열 식별자를 제한된 문자와 길이로 정규화한다.
+현재 구현은 JSON structured operational log와 request correlation을 제공한다. HTTP 완료, ingress 거부, upload 완료·거부, extraction 거부, temp cleanup 실패, rate limit 차단, worker 시작·종료·job 완료·실패가 현재 확인된 이벤트다. 민감 extra key를 거부하고 문자열 식별자를 제한된 문자와 길이로 정규화한다. raw forwarded header, 전체 chain, peer/client IP와 Host는 로그 extra에 허용하지 않는다.
 
 인증 성공·실패와 권한 거부를 목적별 audit/security event로 분류하는 체계, 외부 수집, 보존, 무결성, 접근 통제, 지표·경보는 미완료다. 외부 수집 도구를 도입할 때 request body, authorization header, email, filename, 계약 내용, Provider payload와 raw exception 수집을 차단해야 한다.
 
@@ -176,4 +187,4 @@ v0.9.0 PR-1은 문서 정합화 작업이며 실제 데이터 사용 승인이 �
 
 ## 준비 판단
 
-현재 저장소는 **플랫폼과 운영 통제를 추가 검증할 제한적 합성 데이터 파일럿 후보**다. MySQL·migration·API·worker·보안 기반의 구현과 로컬 smoke는 확인됐지만 HTTPS, trusted proxy, 외부 Secret 운영, backup/restore, 외부 observability와 실제 배포 플랫폼이 미완료이므로 production 배포 또는 실제 데이터 처리가 준비됐다고 판단하지 않는다.
+현재 저장소는 **플랫폼과 운영 통제를 추가 검증할 제한적 합성 데이터 파일럿 후보**다. 애플리케이션의 HTTPS·Host·trusted proxy 계약은 구현됐지만 실제 TLS 종단과 proxy/network 배치는 검증되지 않았다. 외부 Secret 운영, backup/restore, 외부 observability와 실제 배포 플랫폼도 미완료이므로 production 배포 또는 실제 데이터 처리가 준비됐다고 판단하지 않는다.

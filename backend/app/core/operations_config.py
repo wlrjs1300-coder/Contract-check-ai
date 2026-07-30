@@ -8,6 +8,7 @@ from backend.app.core.boundary_config import get_boundary_config
 from backend.app.core.email_lookup import get_email_lookup_key
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.services.analysis_provider_factory import create_analysis_provider
+from backend.app.core.proxy_config import get_proxy_config
 
 
 class OperationsConfigurationError(RuntimeError):
@@ -156,6 +157,7 @@ def validate_runtime_configuration() -> None:
         (_validate_database_for_production, "invalid_database_config"),
         (_validate_debug_controls_for_production, "invalid_debug_config"),
         (_validate_provider_for_production, "invalid_provider_config"),
+        (get_proxy_config, "invalid_proxy_config"),
         (get_boundary_config, "invalid_boundary_config"),
     )
     for validator, category in validators:
