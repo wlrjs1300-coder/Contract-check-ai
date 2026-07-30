@@ -62,9 +62,9 @@
 | DB 설정/Secret | `DATABASE_URL` | API, worker, migrate | credential 포함 가능, Backend 전용 |
 | DB 초기화 | `MYSQL_DATABASE`, `MYSQL_USER` | MySQL | 공개 Frontend에 노출하지 않음 |
 | DB Secret | `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | MySQL | 전용 Secret 주입 필요 |
-| 암호화 Secret | `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID` | API, worker, migrate | 실제 key 값 기록·로그 금지 |
-| 인증 Secret | `JWT_SECRET` | API, worker, migrate | 강한 독립 값 사용 |
-| lookup Secret | `EMAIL_LOOKUP_HMAC_KEY` | API, worker, migrate | 암호화 key와 분리 |
+| 암호화 Secret | `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID` | API, worker | 실제 key 값 기록·로그 금지 |
+| 인증 Secret | `JWT_SECRET` | API | 강한 독립 값 사용 |
+| lookup Secret | `EMAIL_LOOKUP_HMAC_KEY` | API | 암호화 key와 분리 |
 | 공개 운영 설정 | `CORS_ALLOWED_ORIGINS` | API, migrate | 실제 HTTPS Frontend origin만 허용 |
 | Provider 설정 | `ANALYSIS_PROVIDER` | API, worker, migrate | production에서 synthetic/fake 차단 |
 | ingress 설정 | `TRUST_PROXY_HEADERS` | API | 기본 불신, production 명시값 필수 |
@@ -140,6 +140,12 @@ MySQL 연결과 migration 실행 기반은 구현됐지만 backup/restore 운영
 - migration 실패 시 중단·복구 판단과 재실행 조건
 
 실제 데이터 backfill, 무중단 migration, point-in-time recovery와 managed DB 제품은 확정되지 않았다.
+
+## Secret lifecycle
+
+서비스별 최소 주입 범위, JWT·data encryption keyring·email lookup HMAC·DB credential의 서로 다른 교체 영향과 synthetic rehearsal은 [Secret lifecycle runbook](secret-lifecycle-runbook.md)을 따른다. API는 DB·JWT·HMAC·encryption keyring을, worker는 DB·encryption keyring을, migration은 DB 연결만 사용한다. MySQL 초기화 password는 DB 서비스에만 주입하며 Backend Secret을 Frontend나 build argument로 전달하지 않는다.
+
+tracked-file validation과 synthetic rehearsal이 존재해도 외부 Secret 저장소, 실제 credential rotation, 실제 row 재암호화와 폐기 절차가 완료된 것은 아니다. 실제 `.env`, 실제 Secret 값과 특정 Secret/KMS 제품은 저장소에 추가하거나 이 문서에서 임의로 확정하지 않는다.
 
 ## 로그와 관측성
 

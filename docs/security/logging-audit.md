@@ -43,6 +43,8 @@ Concrete log retention periods, log collection systems, alert thresholds, roles,
 
 Forwarded metadata는 승인된 proxy 경계에서 scheme과 공개 rate-limit용 보조 client context를 계산하는 데만 사용한다. raw `Forwarded`·`X-Forwarded-*`, 전체 IP chain과 IP 원문을 operational/audit/security log에 기록하지 않으며 사용자 인증·권한 identity로 취급하지 않는다.
 
+Secret inventory·validation·rotation 관련 event가 추가되더라도 이름이 제한된 event와 safe error code만 기록한다. Secret 원문, token, DB URL, encryption/HMAC key material, credential과 rehearsal 내부 값은 operational/audit/security log에 기록하지 않는다. key ID를 기록할 후속 요구가 생기면 길이와 문자 allowlist를 통과한 metadata만 별도 승인한다.
+
 ## 1. 문서 목적
 
 이 문서는 ContractCheck AI v0.2.2 PR-3 범위에서 운영 로그, 감사 로그, 보안 이벤트 로그의 설계 초안을 정의한다.

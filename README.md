@@ -129,7 +129,7 @@ npm.cmd run dev
 - Backend health: `http://localhost:8000/health`
 - API 문서: `http://localhost:8000/docs`
 
-Backend startup에는 최소한 `JWT_SECRET`, `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID`, `EMAIL_LOOKUP_HMAC_KEY`가 필요합니다. 개발용 합성값은 현재 PowerShell 세션에만 주입하고 실제 `.env` 파일이나 실제 Secret은 커밋하지 않습니다.
+API startup에는 `DATABASE_URL`, `JWT_SECRET`, `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID`, `EMAIL_LOOKUP_HMAC_KEY`가 필요합니다. worker는 DB와 data encryption keyring만, migration은 DB 연결만 필요합니다. 개발용 합성값은 현재 PowerShell 세션에만 주입하고 실제 `.env` 파일이나 실제 Secret은 커밋하지 않습니다. 변수 이름만 제공하는 [`.env.example`](.env.example)과 제품 중립 [Secret lifecycle runbook](docs/deployment/secret-lifecycle-runbook.md)을 기준으로 주입 범위와 교체 영향을 확인합니다.
 
 ### 환경변수
 
@@ -138,9 +138,9 @@ Backend startup에는 최소한 `JWT_SECRET`, `DATA_ENCRYPTION_KEYS_JSON`, `DATA
 | 분류 | 이름 | 목적 | production 원칙 |
 |---|---|---|---|
 | 실행 설정 | `APP_ENV` | test/development/production 구분 | `production` 또는 `prod`를 명시 |
-| Secret | `DATABASE_URL` | SQLAlchemy DB 연결 | credential 포함 가능, Backend에만 주입하고 SQLite 금지 |
-| Secret | `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID` | 저장 암호화 keyring | Backend 전용 저장·주입 |
-| Secret | `JWT_SECRET`, `EMAIL_LOOKUP_HMAC_KEY` | JWT 서명과 email lookup | 서로 독립된 강한 값 사용 |
+| Secret | `DATABASE_URL` | SQLAlchemy DB 연결 | API·worker·migrate에만 주입하고 production SQLite 금지 |
+| Secret | `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID` | 저장 암호화 keyring | API·worker에만 저장·주입 |
+| Secret | `JWT_SECRET`, `EMAIL_LOOKUP_HMAC_KEY` | JWT 서명과 email lookup | API에만 주입하고 서로 독립된 강한 값 사용 |
 | 공개 운영 설정 | `CORS_ALLOWED_ORIGINS`, `ANALYSIS_PROVIDER` | 허용 origin과 Provider 모드 | 명시값 필수, wildcard와 synthetic/fake Provider 금지 |
 | API ingress 설정 | `TRUST_PROXY_HEADERS`, `TRUSTED_PROXY_CIDRS` | API forwarded metadata 신뢰 경계 | 기본 불신, wildcard 금지, Uvicorn proxy 처리 비활성화 |
 | API ingress 설정 | `REQUIRE_HTTPS`, `ALLOWED_HOSTS` | API HTTPS와 Host 검증 | production API에서 HTTPS와 명시 Host 필수 |
@@ -149,7 +149,7 @@ Backend startup에는 최소한 `JWT_SECRET`, `DATA_ENCRYPTION_KEYS_JSON`, `DATA
 | DB 컨테이너 | `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | MySQL 초기화 | password는 Secret, API에 노출 금지 |
 | Frontend 공개 설정 | `VITE_API_BASE_URL` | 브라우저의 API 주소 | 공개 HTTPS URL만 사용, Secret 금지 |
 
-`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, worker polling·lease·heartbeat 설정과 temp/orphan cleanup 설정은 코드에 선택적 기본값이 있습니다. 정확한 운영값과 Secret lifecycle은 v0.9.0 후속 운영 작업에서 확정합니다.
+`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, worker polling·lease·heartbeat 설정과 temp/orphan cleanup 설정은 코드에 선택적 기본값이 있습니다. tracked file 경계 검사는 `scripts/validate_secret_boundaries.py`, 실제 값 없는 교체 rehearsal은 `scripts/secret_rotation_rehearsal.py`로 실행합니다. 외부 Secret 저장소와 실제 production rotation은 아직 확정·완료되지 않았습니다.
 
 임시 DB가 필요하면 Backend 실행 전에 PowerShell 세션에서 지정할 수 있습니다.
 
