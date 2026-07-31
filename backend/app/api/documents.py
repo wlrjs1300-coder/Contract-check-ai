@@ -12,6 +12,7 @@ from backend.app.db.database import get_db
 from backend.app.core.auth import get_current_user
 from backend.app.core.boundary_config import get_boundary_config
 from backend.app.core.logging import log_event
+from backend.app.core.security_events import log_access_not_granted
 from backend.app.core.rate_limit import enforce_user_rate_limit
 from backend.app.core.encryption_config import EncryptionKeyring, get_encryption_keyring
 from backend.app.db.models import (
@@ -412,6 +413,8 @@ def _get_document_for_current_user(
     db: Session,
     document_id: str,
     current_user: User,
+    request: Request | None = None,
+    action_code: str = "read",
 ) -> Document:
     statement = (
         select(Document)
@@ -423,6 +426,16 @@ def _get_document_for_current_user(
     )
     document = db.scalar(statement)
     if document is None:
+        log_access_not_granted(
+            request_id=(
+                getattr(request.state, "request_id", None)
+                if request is not None
+                else None
+            ),
+            user_id=current_user.id,
+            target_type="document",
+            action_code=action_code,
+        )
         raise HTTPException(
             status_code=404,
             detail="Document not found.",
@@ -694,6 +707,7 @@ async def upload_document(
 @router.get("/{document_id}")
 def get_document(
     document_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
@@ -701,6 +715,7 @@ def get_document(
         db=db,
         document_id=document_id,
         current_user=current_user,
+        request=request,
     )
     keyring = get_encryption_keyring()
     return _serialize_document(document, keyring=keyring)
@@ -709,6 +724,7 @@ def get_document(
 @router.get("/{document_id}/analysis-results")
 def get_analysis_results(
     document_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, object]:
@@ -716,6 +732,7 @@ def get_analysis_results(
         db=db,
         document_id=document_id,
         current_user=current_user,
+        request=request,
     )
 
     statement = (

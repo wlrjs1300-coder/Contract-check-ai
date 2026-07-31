@@ -198,3 +198,15 @@ v0.9.0 PR-1은 문서 정합화 작업이며 실제 데이터 사용 승인이 �
 ## 준비 판단
 
 현재 저장소는 **플랫폼과 운영 통제를 추가 검증할 제한적 합성 데이터 파일럿 후보**다. 애플리케이션의 HTTPS·Host·trusted proxy 계약은 구현됐지만 실제 TLS 종단과 proxy/network 배치는 검증되지 않았다. 외부 Secret 운영, backup/restore, 외부 observability와 실제 배포 플랫폼도 미완료이므로 production 배포 또는 실제 데이터 처리가 준비됐다고 판단하지 않는다.
+
+## PR-5 감사·관측성 현재 상태
+
+operational/audit/security event schema, 비가역 actor 파생값, process-local
+metric과 synthetic alert rehearsal이 구현됐다. 허용·금지 필드, event code와
+collector 실패 정책은 `audit-observability-runbook.md`를 따른다.
+
+외부 collector 제품, 실제 보존 기간, WORM/hash-chain, 실제 alert channel,
+on-call·incident response는 미선정 또는 미연동이다. process-local metric은
+multi-replica 집계를 보장하지 않으며 synthetic threshold는 production
+승인값이 아니다. 실제 production observability 완료나 실제 계약서·개인정보
+사용 승인을 주장하지 않는다.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from backend.app.core.auth import (
 )
 from backend.app.core.email_lookup import build_email_lookup_hash
 from backend.app.core.rate_limit import enforce_public_rate_limit
+from backend.app.core.security_events import emit_security_event
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.db.database import get_db
 from backend.app.db.models import User
@@ -42,7 +43,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     response_model=AuthRegisterResponse,
     dependencies=[Depends(enforce_public_rate_limit("register"))],
 )
-def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> AuthRegisterResponse:
+def register(
+    payload: AuthRegisterRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> AuthRegisterResponse:
     email = normalize_and_validate_email(payload.email)
     try:
         password_hash = hash_password(payload.password)
@@ -91,6 +96,16 @@ def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> Aut
             detail="A user with that email already exists.",
         )
     db.refresh(user)
+    emit_security_event(
+        event="account_registered",
+        event_category="audit",
+        outcome="success",
+        request_id=getattr(request.state, "request_id", None),
+        actor_type="authenticated_user",
+        actor_identifier=user.id,
+        action_code="register",
+        status_code=200,
+    )
 
     return AuthRegisterResponse(
         user_id=user.id,
@@ -107,6 +122,7 @@ def register(payload: AuthRegisterRequest, db: Session = Depends(get_db)) -> Aut
 )
 def login(
     payload: AuthLoginRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> AuthLoginResponse:
     email = normalize_and_validate_email(payload.email)
@@ -122,12 +138,34 @@ def login(
             detail="Stored encrypted data is unavailable.",
         ) from exc
     if user is None:
+        emit_security_event(
+            event="authentication_failed",
+            event_category="security",
+            outcome="denied",
+            request_id=getattr(request.state, "request_id", None),
+            actor_type="anonymous",
+            action_code="login",
+            status_code=401,
+            safe_error_code="INVALID_CREDENTIALS",
+            block_reason_code="AUTHENTICATION_NOT_GRANTED",
+        )
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if not user.is_active:
+        emit_security_event(
+            event="authentication_failed",
+            event_category="security",
+            outcome="denied",
+            request_id=getattr(request.state, "request_id", None),
+            actor_type="anonymous",
+            action_code="login",
+            status_code=401,
+            safe_error_code="INVALID_CREDENTIALS",
+            block_reason_code="AUTHENTICATION_NOT_GRANTED",
+        )
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials.",
@@ -135,6 +173,16 @@ def login(
         )
     token, expires_in = issue_jwt_for_user(
         user=user,
+    )
+    emit_security_event(
+        event="authentication_succeeded",
+        event_category="audit",
+        outcome="success",
+        request_id=getattr(request.state, "request_id", None),
+        actor_type="authenticated_user",
+        actor_identifier=user.id,
+        action_code="login",
+        status_code=200,
     )
     return AuthLoginResponse(access_token=token, token_type="bearer", expires_in=expires_in)
 

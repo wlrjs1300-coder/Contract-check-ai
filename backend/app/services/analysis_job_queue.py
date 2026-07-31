@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select, update
@@ -14,6 +15,13 @@ from backend.app.services.provider_execution import ProviderExecutionError
 SAFE_RETRY_MESSAGE = "Analysis is temporarily unavailable and will be retried."
 SAFE_FAILED_MESSAGE = "Analysis could not be completed."
 RETRY_DELAYS_SECONDS = (5.0, 30.0, 120.0)
+
+
+@dataclass(frozen=True)
+class StaleRecoveryResult:
+    recovered_count: int
+    retried_count: int
+    failed_count: int
 
 
 def claim_next_job(
@@ -97,6 +105,14 @@ def recover_stale_jobs(
     *,
     now: datetime | None = None,
 ) -> int:
+    return recover_stale_jobs_result(db, now=now).recovered_count
+
+
+def recover_stale_jobs_result(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> StaleRecoveryResult:
     recovered_at = now or datetime.utcnow()
     stale_ids = db.scalars(
         select(AnalysisJob.id).where(
@@ -105,6 +121,8 @@ def recover_stale_jobs(
         )
     ).all()
     recovered = 0
+    retried = 0
+    failed = 0
     for job_id in stale_ids:
         job = db.get(AnalysisJob, job_id)
         if (
@@ -147,8 +165,16 @@ def recover_stale_jobs(
         )
         if result.rowcount == 1:
             recovered += 1
+            if exhausted:
+                failed += 1
+            else:
+                retried += 1
         db.commit()
-    return recovered
+    return StaleRecoveryResult(
+        recovered_count=recovered,
+        retried_count=retried,
+        failed_count=failed,
+    )
 
 
 def retry_delay_seconds(
