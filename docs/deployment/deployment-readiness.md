@@ -141,6 +141,10 @@ MySQL 연결과 migration 실행 기반은 구현됐지만 backup/restore 운영
 
 실제 데이터 backfill, 무중단 migration, point-in-time recovery와 managed DB 제품은 확정되지 않았다.
 
+제품 중립 backup·restore 순서, repository 밖 artifact 경계, migration 실패 중단과 downgrade 금지는 [MySQL backup/restore runbook](mysql-backup-restore-runbook.md)을 따른다. 격리 synthetic rehearsal은 별도 source/restore DB에서 Alembic head, schema·index·constraint, encrypted envelope, ownership, readiness와 신규 write를 확인하며 기존 Compose `mysql-data` volume을 사용하지 않는다.
+
+이 rehearsal은 실제 retention, offsite backup, artifact 저장 암호화·key custody, PITR, 대용량 성능 또는 production restore 완료를 의미하지 않는다.
+
 ## Secret lifecycle
 
 서비스별 최소 주입 범위, JWT·data encryption keyring·email lookup HMAC·DB credential의 서로 다른 교체 영향과 synthetic rehearsal은 [Secret lifecycle runbook](secret-lifecycle-runbook.md)을 따른다. API는 DB·JWT·HMAC·encryption keyring을, worker는 DB·encryption keyring을, migration은 DB 연결만 사용한다. MySQL 초기화 password는 DB 서비스에만 주입하며 Backend Secret을 Frontend나 build argument로 전달하지 않는다.

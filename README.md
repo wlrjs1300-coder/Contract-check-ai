@@ -151,6 +151,8 @@ API startup에는 `DATABASE_URL`, `JWT_SECRET`, `DATA_ENCRYPTION_KEYS_JSON`, `DA
 
 `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, worker polling·lease·heartbeat 설정과 temp/orphan cleanup 설정은 코드에 선택적 기본값이 있습니다. tracked file 경계 검사는 `scripts/validate_secret_boundaries.py`, 실제 값 없는 교체 rehearsal은 `scripts/secret_rotation_rehearsal.py`로 실행합니다. 외부 Secret 저장소와 실제 production rotation은 아직 확정·완료되지 않았습니다.
 
+MySQL backup·restore의 범위, artifact 격리, migration 중단 조건과 restore 검증 순서는 [MySQL backup/restore runbook](docs/deployment/mysql-backup-restore-runbook.md)을 따릅니다. `scripts/mysql_backup_rehearsal.py`와 `scripts/mysql_restore_rehearsal.py`는 기존 `mysql-data` volume이나 host 3306을 사용하지 않는 격리 synthetic rehearsal이며 실제 production backup, retention, offsite 저장소나 PITR 완료를 뜻하지 않습니다.
+
 임시 DB가 필요하면 Backend 실행 전에 PowerShell 세션에서 지정할 수 있습니다.
 
 ```powershell
