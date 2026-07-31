@@ -451,3 +451,19 @@ Principles:
 - Real contract use approval: Not granted
 - Real personal data use approval: Not granted
 - Implementation approval: Not granted
+
+## PR-5 구현 상태
+
+operational/audit/security category와 고정 severity/outcome을 구분하고, 인증,
+owner-scoped 접근 미허용, rate limit, readiness, cleanup, worker retry·terminal·
+stale event를 기록한다. 실제 actor ID 대신 도메인 분리 SHA-256 파생값을 쓴다.
+
+허용 필드는 event 식별·분류·correlation, 역할·대상 유형·고정 action/status/error
+code, 제한된 worker/job 정보와 metric/alert 표시다. 실제 user/resource ID,
+email, IP, filename, credential, header/body, 계약·추출·evidence 본문, Provider
+payload, raw exception, stack trace와 local/temp/artifact path는 금지한다.
+
+metric은 process-local 고정 counter이고 synthetic alert threshold는 production
+미승인 후보이다. 외부 collector, 보존 기간, 접근 통제, WORM, hash-chain,
+서명, on-call과 incident response는 미구현 또는 미확정이다. 실제 개인정보나
+계약서 사용 승인이 아니다.

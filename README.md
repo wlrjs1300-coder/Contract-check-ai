@@ -215,3 +215,17 @@ JWT 인증, 사용자별 ownership과 저장 암호화가 구현됐더라도 실
 ## 면책
 
 현재 결과는 합성 Provider를 사용한 기술 검증 결과이며 실제 외부 분석 품질을 검증한 것이 아닙니다. 이 프로젝트는 법률 자문이나 최종 판단을 제공하지 않으며 적법성, 위법성, 무효 여부 또는 계약서의 안전을 확정하지 않습니다.
+
+## v0.9.0 감사·관측성 최소 기반
+
+운영 진단용 `operational`, 허용된 주체 행동용 `audit`, 차단·거부 판단용
+`security` JSON event를 구분한다. 인증, owner-scoped 접근 미허용, rate limit,
+readiness, cleanup과 worker lifecycle event를 안전한 고정 code로 기록한다.
+내부 사용자 ID는 도메인 분리 SHA-256 파생값으로만 표시한다.
+
+표준 라이브러리 기반 metric은 process-local이며 replica 간 집계를 보장하지
+않는다. `scripts/observability_rehearsal.py`의 alert threshold는 synthetic
+rehearsal 전용이고 production 승인값이 아니다. 외부 collector, 실제 경보,
+보존 기간, WORM/hash-chain, on-call 연동은 아직 구현 또는 확정되지 않았다.
+상세 경계는 [audit observability runbook](docs/deployment/audit-observability-runbook.md)을
+따른다. 이는 실제 계약서나 개인정보 사용 승인이 아니다.

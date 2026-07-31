@@ -26,6 +26,7 @@ from backend.app.db.database import get_db
 from backend.app.core.auth import get_current_user
 from backend.app.core.boundary_config import get_boundary_config
 from backend.app.core.logging import log_event
+from backend.app.core.security_events import log_access_not_granted
 from backend.app.core.rate_limit import enforce_user_rate_limit
 from backend.app.db.models import Extraction, ExtractionPage
 from backend.app.db.models import User
@@ -656,6 +657,8 @@ def _get_extraction_with_pages(
     extraction_id: str,
     db: Session,
     current_user: User,
+    request: Request | None = None,
+    action_code: str = "read",
 ) -> Extraction:
     statement = (
         select(Extraction)
@@ -668,6 +671,16 @@ def _get_extraction_with_pages(
     extraction = db.scalar(statement)
 
     if extraction is None:
+        log_access_not_granted(
+            request_id=(
+                getattr(request.state, "request_id", None)
+                if request is not None
+                else None
+            ),
+            user_id=current_user.id,
+            target_type="extraction",
+            action_code=action_code,
+        )
         raise HTTPException(
             status_code=404,
             detail=_error_detail(
@@ -1483,6 +1496,7 @@ async def create_image_extraction(
 )
 def get_extraction(
     extraction_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ExtractionResponse:
@@ -1490,6 +1504,7 @@ def get_extraction(
         extraction_id=extraction_id,
         db=db,
         current_user=current_user,
+        request=request,
     )
     keyring = get_encryption_keyring()
     return _serialize_extraction(extraction, owner_id=current_user.id, keyring=keyring)
@@ -1502,6 +1517,7 @@ def get_extraction(
 )
 def get_extraction_review(
     extraction_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ExtractionReviewResponse:
@@ -1509,6 +1525,7 @@ def get_extraction_review(
         extraction_id=extraction_id,
         db=db,
         current_user=current_user,
+        request=request,
     )
     keyring = get_encryption_keyring()
     owner_id = current_user.id
@@ -1787,6 +1804,7 @@ def patch_extraction_page_review(
     extraction_id: str,
     page_id: str,
     payload: PageReviewPatchRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     if_match: str | None = Header(default=None, alias="If-Match"),
@@ -1795,6 +1813,8 @@ def patch_extraction_page_review(
         extraction_id=extraction_id,
         db=db,
         current_user=current_user,
+        request=request,
+        action_code="update_review",
     )
     keyring = get_encryption_keyring()
     owner_id = current_user.id
@@ -2026,6 +2046,7 @@ def patch_extraction_page_review(
 )
 def confirm_extraction(
     extraction_id: str,
+    request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -2034,6 +2055,8 @@ def confirm_extraction(
         extraction_id=extraction_id,
         db=db,
         current_user=current_user,
+        request=request,
+        action_code="confirm",
     )
     keyring = get_encryption_keyring()
     owner_id = current_user.id

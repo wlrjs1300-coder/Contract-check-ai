@@ -99,6 +99,13 @@ def _reject(request: Request, bucket: str, decision: RateLimitDecision) -> None:
         status=429,
         request_id=getattr(request.state, "request_id", None),
         safe_error_code="RATE_LIMIT_EXCEEDED",
+        event_category="security",
+        severity="warning",
+        outcome="blocked",
+        action_code=bucket,
+        status_code=429,
+        block_reason_code="RATE_LIMIT_EXCEEDED",
+        alert_candidate=True,
         extra={"rate_limit_bucket": bucket},
     )
     raise HTTPException(
