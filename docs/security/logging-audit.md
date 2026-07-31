@@ -45,6 +45,8 @@ Forwarded metadata는 승인된 proxy 경계에서 scheme과 공개 rate-limit�
 
 Secret inventory·validation·rotation 관련 event가 추가되더라도 이름이 제한된 event와 safe error code만 기록한다. Secret 원문, token, DB URL, encryption/HMAC key material, credential과 rehearsal 내부 값은 operational/audit/security log에 기록하지 않는다. key ID를 기록할 후속 요구가 생기면 길이와 문자 allowlist를 통과한 metadata만 별도 승인한다.
 
+Backup·restore rehearsal은 단계, 상태와 safe error code만 출력한다. 향후 `backup_started`·`backup_completed`·`backup_failed`·`restore_started`·`restore_completed`·`restore_failed` event가 필요하더라도 실제 artifact path, DB URL, table row, dump output, credential과 Secret은 기록하지 않는다. 현재 production backup logging은 구현하지 않는다.
+
 ## 1. 문서 목적
 
 이 문서는 ContractCheck AI v0.2.2 PR-3 범위에서 운영 로그, 감사 로그, 보안 이벤트 로그의 설계 초안을 정의한다.

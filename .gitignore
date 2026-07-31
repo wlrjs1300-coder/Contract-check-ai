@@ -40,6 +40,12 @@ __pycache__/
 *.sqlite3
 data/
 mysql-data/
+*.sql
+*.dump
+*.bak
+*.backup
+*.sql.gz
+*.dump.gz
 
 # raw contract/document files
 *.pdf
