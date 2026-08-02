@@ -2,13 +2,13 @@
 
 ## 문서 목적
 
-현재 기술 검증 MVP를 외부 환경의 제한적 합성 데이터 파일럿 후보로 검토하기 위한 플랫폼 중립 기준을 정의한다. 이 문서는 특정 플랫폼 선정, production 배포 완료, 실제 계약서·개인정보 처리 승인 또는 실제 외부 Provider 사용 승인을 의미하지 않는다.
+저장소와 로컬 격리 synthetic pilot rehearsal까지 완료된 운영 준비형 MVP를 외부 환경으로 옮기기 전에 적용할 플랫폼 중립 기준을 정의한다. 이 문서는 특정 플랫폼 선정, production 배포 완료, 실제 계약서·개인정보 처리 승인 또는 실제 외부 Provider 사용 승인을 의미하지 않는다.
 
 현재 구현의 기준선은 v0.8.0 release closure와 v0.9.0 운영 준비 로드맵이다. 과거 SQLite와 초기 분석 실행 구조 중심의 배포 문서는 당시 기록이며 현재 실행 구조의 근거로 사용하지 않는다.
 
 ## 현재 배포 가능 범위
 
-현재 코드는 다음 요소를 갖춘 제한적 합성 데이터 파일럿 후보이다.
+현재 코드는 다음 요소를 갖추고 로컬 격리 synthetic pilot rehearsal을 완료했다.
 
 - React 정적 Frontend build와 공개 `VITE_API_BASE_URL`
 - FastAPI API와 별도 DB polling worker
@@ -27,9 +27,9 @@
 
 - 실제 배포 플랫폼, 운영 주소와 조직별 운영 책임
 - 실제 HTTPS/TLS 종단, proxy 배치와 network 접근 통제 검증
-- 외부 Secret 저장소, 접근 검토, 교체·폐기·복구 절차
-- MySQL backup·restore, 보존·폐기와 복구 rehearsal
-- audit/security event 체계, 외부 로그 수집, 지표·경보와 보존
+- 외부 Secret 저장소, 실제 credential 접근 검토와 production 교체·폐기·복구 절차
+- 실제 backup retention·offsite storage·artifact 저장 암호화·key custody·PITR·production restore
+- 외부 observability collector, 실제 보존·무결성·접근 통제·alert channel과 on-call
 - 실제 외부 Provider adapter, Provider 데이터 처리 조건과 credential
 - 실제 계약서·실제 개인정보 사용 승인
 - 사용자 삭제·탈퇴·만료 파기와 backup 재등장 방지
@@ -131,13 +131,9 @@ Compose 외 방식으로 Uvicorn을 실행할 때도 `--no-proxy-headers`를 명
 
 ## DB, migration과 복구
 
-MySQL 연결과 migration 실행 기반은 구현됐지만 backup/restore 운영 절차는 미완료다. 제한적 파일럿 전에 synthetic DB를 사용해 다음을 별도 검증해야 한다.
+제품 중립 MySQL backup/restore runbook과 기존 Compose 자원에 영향을 주지 않는 격리 synthetic backup·restore rehearsal은 완료됐다. Alembic head, schema·index·constraint, 암호화 envelope, ownership, readiness와 restore 후 신규 write를 검증했다.
 
-- backup 대상과 temp 원본 경로의 backup 제외
-- backup 암호화, 접근 권한, 보존·폐기 책임
-- 격리 DB restore와 Alembic head 확인
-- restore 후 `/ready`, ownership과 암호화 row 정합성
-- migration 실패 시 중단·복구 판단과 재실행 조건
+완료된 rehearsal 범위는 backup 대상과 temp 원본 경로의 제외, 격리 DB restore, Alembic head, `/ready`, ownership과 암호화 row 정합성, migration 실패 시 중단 기준이다. 실제 backup 암호화·접근 권한·보존·폐기 책임은 별도 운영 확정이 필요하다.
 
 실제 데이터 backfill, 무중단 migration, point-in-time recovery와 managed DB 제품은 확정되지 않았다.
 
@@ -155,7 +151,7 @@ tracked-file validation과 synthetic rehearsal이 존재해도 외부 Secret 저
 
 현재 구현은 JSON structured operational log와 request correlation을 제공한다. HTTP 완료, ingress 거부, upload 완료·거부, extraction 거부, temp cleanup 실패, rate limit 차단, worker 시작·종료·job 완료·실패가 현재 확인된 이벤트다. 민감 extra key를 거부하고 문자열 식별자를 제한된 문자와 길이로 정규화한다. raw forwarded header, 전체 chain, peer/client IP와 Host는 로그 extra에 허용하지 않는다.
 
-인증 성공·실패와 권한 거부를 목적별 audit/security event로 분류하는 체계, 외부 수집, 보존, 무결성, 접근 통제, 지표·경보는 미완료다. 외부 수집 도구를 도입할 때 request body, authorization header, email, filename, 계약 내용, Provider payload와 raw exception 수집을 차단해야 한다.
+인증 성공·실패와 권한 거부를 목적별 audit/security event로 분류하는 schema, process-local counters와 synthetic alert rehearsal은 완료됐다. 외부 수집, 실제 보존·무결성·접근 통제, alert channel과 on-call은 미완료다. 외부 수집 도구를 도입할 때 request body, authorization header, email, filename, 계약 내용, Provider payload와 raw exception 수집을 차단해야 한다.
 
 ## 파일과 데이터 경계
 
@@ -183,7 +179,7 @@ tracked-file validation과 synthetic rehearsal이 존재해도 외부 Secret 저
 
 ## 실제 데이터 사용 게이트
 
-v0.9.0 PR-1은 문서 정합화 작업이며 실제 데이터 사용 승인이 아니다. 실제 계약서 또는 실제 개인정보를 사용하려면 별도로 다음을 확정하고 검증해야 한다.
+v0.9.0 PR-1~PR-6과 격리 synthetic pilot rehearsal 완료는 실제 데이터 사용 승인이 아니다. 실제 계약서 또는 실제 개인정보를 사용하려면 별도로 다음을 확정하고 검증해야 한다.
 
 - 처리 목적·법적 근거, 사용자 고지와 승인 주체
 - 보존·삭제 기간, 사용자 삭제·탈퇴와 backup 재등장 방지
@@ -197,7 +193,7 @@ v0.9.0 PR-1은 문서 정합화 작업이며 실제 데이터 사용 승인이 �
 
 ## 준비 판단
 
-현재 저장소는 **플랫폼과 운영 통제를 추가 검증할 제한적 합성 데이터 파일럿 후보**다. 애플리케이션의 HTTPS·Host·trusted proxy 계약은 구현됐지만 실제 TLS 종단과 proxy/network 배치는 검증되지 않았다. 외부 Secret 운영, backup/restore, 외부 observability와 실제 배포 플랫폼도 미완료이므로 production 배포 또는 실제 데이터 처리가 준비됐다고 판단하지 않는다.
+현재 저장소는 **저장소와 로컬 격리 synthetic pilot rehearsal까지 완료된 운영 준비형 MVP**다. 애플리케이션의 HTTPS·Host·trusted proxy 계약과 synthetic Secret·backup/restore·observability rehearsal은 검증됐지만 실제 TLS 종단과 proxy/network 배치, 외부 Secret 운영, production backup custody, 외부 observability와 실제 배포 플랫폼은 미완료다. 따라서 production 배포 또는 실제 데이터 처리가 준비됐다고 판단하지 않는다.
 
 ## PR-5 감사·관측성 현재 상태
 
