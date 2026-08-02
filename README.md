@@ -2,9 +2,11 @@
 
 계약 문서를 조항 단위로 분리하고, 개인정보 보호와 출력 검증을 거쳐 위험 신호와 검토 권고를 제공하는 계약서 리스크 관리 MVP입니다.
 
-> **현재 상태: v0.8.0 기술 검증 MVP · v0.9.0 운영 준비 진행 중**
+> **현재 상태: v0.9.0 운영 준비 및 제한적 합성 데이터 파일럿 완료**
 >
-> 결정론적 합성 Provider로 데이터 전달 경계, 결과 검증과 Frontend·Backend 통합 구조를 검증했습니다. MySQL·migration·API·worker의 로컬 Docker smoke는 완료했지만 실제 외부 Provider, 실제 배포 환경과 실제 개인정보 사용은 승인되거나 검증되지 않았습니다.
+> production급 strict runtime 계약, HTTPS·Host·CORS·trusted proxy 경계, synthetic Secret lifecycle 및 MySQL backup/restore rehearsal, audit/security event 최소 기반과 격리 synthetic pilot의 인증·ownership·job·result·로그 비노출·종료 cleanup을 검증했습니다. 파일럿 종료 후 pilot Docker 자원은 0건이었습니다.
+>
+> 완료된 범위는 로컬 격리 합성 검증까지입니다. 실제 TLS 종단·proxy 배치, production 배포 플랫폼, 외부 Secret manager/KMS, 외부 observability·alert/on-call, 실제 Provider, 실제 데이터 승인, retention·삭제·복원 방지와 incident response는 완료되지 않았습니다.
 
 ## 핵심 기술 포인트
 
@@ -191,17 +193,20 @@ npm.cmd run build
 
 현재 기준 확인 기록:
 
-- Backend: 635개 테스트 수집
-- Frontend: 110개 테스트 통과
-- v0.8.0 로컬 Docker/MySQL synthetic smoke: MySQL 8.4, Alembic head, API·worker, `/health`·`/ready` 확인
+- Backend: 743개 통과, 10개 건너뜀, Starlette/httpx deprecation warning 1건
+- Frontend: 테스트 파일 8개, 테스트 110개 통과; lint와 production build 통과
+- Ruff와 pip check 통과
+- Secret·backup·pilot boundary validator 통과
+- Secret rotation, MySQL backup·restore, observability와 isolated synthetic pilot rehearsal 통과
+- synthetic pilot 종료 후 pilot container·network·volume 잔존 0건
 
-위 수치는 해당 확인 시점의 기록이다. 이 문서 정합화 작업에서는 전체 테스트를 새로 실행하지 않았다.
+위 수치는 v0.9.0 PR-1~PR-6 완료 시점의 최종 검증 기록이다.
 
 ## 현재 범위와 한계
 
 현재 분석 UI의 직접 업로드 흐름은 UTF-8 TXT 한 파일을 최대 1 MiB까지 처리합니다. Backend extraction API에는 텍스트 PDF, 이미지 OCR과 스캔 PDF 처리·확인 흐름이 존재하지만 모든 형식이 동일한 Frontend 사용자 흐름으로 통합된 것은 아닙니다.
 
-개발 기본 실행은 SQLite를 사용할 수 있습니다. production runtime은 SQLite를 거부하며 Compose는 MySQL 8.4, Alembic migration one-shot, API와 worker 분리를 사용합니다. Forwarded header는 기본적으로 신뢰하지 않고 명시된 proxy CIDR에서만 제한적으로 해석하며 production은 HTTPS와 Host 검증을 요구합니다. 로컬 Docker/MySQL synthetic smoke는 완료됐지만 실제 TLS 종단과 proxy 배치 검증, 외부 Secret 저장소, backup/restore 운영 절차, 외부 observability와 실제 배포 플랫폼은 아직 미완료 또는 미확정입니다.
+개발 기본 실행은 SQLite를 사용할 수 있습니다. production runtime은 SQLite를 거부하며 Compose는 MySQL 8.4, Alembic migration one-shot, API와 worker 분리를 사용합니다. Forwarded header는 기본적으로 신뢰하지 않고 명시된 proxy CIDR에서만 제한적으로 해석하며 production은 HTTPS와 Host 검증을 요구합니다. 제품 중립 backup/restore runbook과 격리 synthetic rehearsal은 완료됐지만 실제 retention, offsite storage, artifact 저장 암호화·key custody, PITR와 production restore는 미완료입니다. 실제 TLS 종단과 proxy 배치, 외부 Secret 저장소, 외부 observability와 실제 배포 플랫폼도 미완료 또는 미확정입니다.
 
 JWT 인증, 사용자별 ownership과 저장 암호화가 구현됐더라도 실제 계약서나 실제 개인정보 사용이 승인된 것은 아닙니다. 실제 외부 Provider adapter도 연결되지 않았습니다. Provider 전달 전 마스킹과 출력 검증은 규칙 기반 기술 검증이며 모든 개인정보나 위험 조항 탐지를 보장하지 않습니다. 별도 보안·개인정보 검토 전에는 명백한 합성 데이터만 사용합니다.
 
