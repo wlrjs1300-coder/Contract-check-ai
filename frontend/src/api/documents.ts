@@ -1,6 +1,7 @@
 import type { UploadedDocument } from '../types/documents'
 import { apiConfig } from './config'
 import { ApiError, readErrorDetail, readJsonResponse } from './http'
+import { authenticatedRequest } from './authenticatedRequest'
 
 type Fetcher = typeof fetch
 
@@ -76,6 +77,7 @@ function isUploadedDocument(value: unknown): value is UploadedDocument {
 
 export async function uploadDocument(
   file: File,
+  accessToken: string,
   fetcher: Fetcher = fetch,
 ): Promise<UploadedDocument> {
   const formData = new FormData()
@@ -84,11 +86,12 @@ export async function uploadDocument(
   let response: Response
 
   try {
-    response = await fetcher(`${apiConfig.baseUrl}/documents/upload`, {
+    response = await authenticatedRequest(fetcher, `${apiConfig.baseUrl}/documents/upload`, accessToken, {
       method: 'POST',
       body: formData,
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof ApiError) throw error
     throw new ApiError('network', 'The document upload request failed.')
   }
 

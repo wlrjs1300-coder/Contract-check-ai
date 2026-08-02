@@ -6,6 +6,7 @@ import type {
 import type { AnalysisJobStatus } from '../types/analysisJobs'
 import { apiConfig } from './config'
 import { ApiError, readErrorDetail, readJsonResponse } from './http'
+import { authenticatedRequest } from './authenticatedRequest'
 
 type Fetcher = typeof fetch
 
@@ -69,6 +70,7 @@ function isAnalysisResults(value: unknown): value is AnalysisResults {
 export async function getAnalysisResults(
   documentId: string,
   jobId: string,
+  accessToken: string,
   fetcher: Fetcher = fetch,
 ): Promise<AnalysisResults> {
   if (!isNonEmptyString(documentId) || !isNonEmptyString(jobId)) {
@@ -77,11 +79,14 @@ export async function getAnalysisResults(
 
   let response: Response
   try {
-    response = await fetcher(
+    response = await authenticatedRequest(
+      fetcher,
       `${apiConfig.baseUrl}/documents/${encodeURIComponent(documentId)}/analysis-results`,
+      accessToken,
       { method: 'GET' },
     )
-  } catch {
+  } catch (error) {
+    if (error instanceof ApiError) throw error
     throw new ApiError('network', 'The analysis results request failed.')
   }
 

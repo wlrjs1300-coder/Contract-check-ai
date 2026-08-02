@@ -1,4 +1,6 @@
 import pactaLogo from '../assets/PACTA_logo.png'
+import type { AuthStatus, AuthUser } from '../types/auth'
+import type { AuthMode } from './AuthDialog'
 
 export type AppPage = 'home' | 'analyze' | 'results'
 
@@ -15,9 +17,13 @@ const PAGE_LINKS: ReadonlyArray<Readonly<{
 type TopNavigationProps = Readonly<{
   currentPage: AppPage
   onNavigate: (page: AppPage) => void
+  authStatus: AuthStatus
+  currentUser: AuthUser | null
+  onOpenAuth: (mode: AuthMode) => void
+  onLogout: () => void
 }>
 
-export function TopNavigation({ currentPage, onNavigate }: TopNavigationProps) {
+export function TopNavigation({ currentPage, onNavigate, authStatus, currentUser, onOpenAuth, onLogout }: TopNavigationProps) {
   return (
     <header className="app-navbar">
       <a
@@ -50,6 +56,22 @@ export function TopNavigation({ currentPage, onNavigate }: TopNavigationProps) {
           </a>
         ))}
       </nav>
+      <div className="auth-navigation" aria-label="인증 메뉴">
+        {authStatus === 'checking' && <span role="status">인증 확인 중…</span>}
+        {authStatus === 'anonymous' && (
+          <>
+            <button type="button" onClick={() => onOpenAuth('login')}>로그인</button>
+            <span aria-hidden="true">|</span>
+            <button type="button" onClick={() => onOpenAuth('register')}>회원가입</button>
+          </>
+        )}
+        {authStatus === 'authenticated' && currentUser && (
+          <>
+            <span className="auth-email" title={currentUser.email}>{currentUser.email}</span>
+            <button type="button" onClick={onLogout}>로그아웃</button>
+          </>
+        )}
+      </div>
     </header>
   )
 }

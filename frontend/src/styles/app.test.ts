@@ -13,4 +13,15 @@ describe('responsive base styles', () => {
     expect(bodyRule).toBeDefined()
     expect(bodyRule).not.toMatch(/min-width\s*:/)
   })
+
+  it('constrains long authenticated email text and keeps a narrow layout rule', () => {
+    const stylesheet = readFileSync(
+      resolve(process.cwd(), 'src/styles/app.css'),
+      'utf8',
+    )
+
+    expect(stylesheet).toMatch(/\.auth-email\s*{[^}]*max-width:[^}]*text-overflow:\s*ellipsis/s)
+    expect(stylesheet).toMatch(/@media\s*\(max-width:\s*420px\)/)
+    expect(stylesheet).toMatch(/\.auth-dialog\s*{[^}]*width:\s*min\(100%,\s*420px\)/s)
+  })
 })

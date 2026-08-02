@@ -1,8 +1,30 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { StrictMode } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { getCurrentUser } from './api/auth'
+import { ApiError } from './api/http'
+import { ACCESS_TOKEN_KEY } from './auth/session'
 import type { AnalysisJobStatus } from './types/analysisJobs'
 import type { UploadedDocument } from './types/documents'
+
+vi.mock('./api/auth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api/auth')>()
+  return {
+    ...actual,
+    getCurrentUser: vi.fn(() => ({
+      then(resolve: (user: object) => void) {
+        resolve({
+          user_id: 'user-test',
+          email: 'user@example.invalid',
+          is_active: true,
+          created_at: '2026-01-01T00:00:00Z',
+        })
+        return { catch() {} }
+      },
+    })),
+  }
+})
 
 const successfulDocument: UploadedDocument = {
   document_id: 'document-test',
@@ -78,9 +100,122 @@ async function uploadSuccessfulDocument() {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.clearAllMocks()
+  sessionStorage.clear()
+})
+
+beforeEach(() => {
+  sessionStorage.setItem(ACCESS_TOKEN_KEY, 'test-token')
 })
 
 describe('App', () => {
+  it('restores a stored session through auth me', async () => {
+    render(<App />)
+    expect(await screen.findByText('user@example.invalid')).toBeInTheDocument()
+    expect(getCurrentUser).toHaveBeenCalledWith('test-token')
+  })
+
+  it('does not duplicate the startup session check in StrictMode', () => {
+    render(<StrictMode><App /></StrictMode>)
+    expect(getCurrentUser).toHaveBeenCalledOnce()
+  })
+
+  it('removes a stored token when auth me rejects it', async () => {
+    vi.mocked(getCurrentUser).mockRejectedValueOnce(new ApiError('http', 'rejected', { status: 401 }))
+    render(<App />)
+    expect(await screen.findByRole('button', { name: '로그인' })).toBeInTheDocument()
+    expect(sessionStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull()
+  })
+
+  it('shows login and registration actions when anonymous', () => {
+    sessionStorage.clear()
+    render(<App />)
+
+    expect(screen.getByRole('button', { name: '로그인' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '회원가입' })).toBeInTheDocument()
+  })
+
+  it('opens an accessible dialog and closes it with Escape', () => {
+    sessionStorage.clear()
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '로그인' }))
+
+    expect(screen.getByRole('dialog', { name: '로그인' })).toBeInTheDocument()
+    expect(screen.getByLabelText('이메일')).toHaveAttribute('autocomplete', 'username')
+    expect(screen.getByLabelText('비밀번호')).toHaveAttribute('autocomplete', 'current-password')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('validates registration and switches to login after success', async () => {
+    sessionStorage.clear()
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      user_id: 'new-user', email: 'new@example.invalid', is_active: true, created_at: '2026-01-01T00:00:00Z',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '회원가입' }))
+    fireEvent.change(screen.getByLabelText('이메일'), { target: { value: 'invalid' } })
+    fireEvent.change(screen.getByLabelText('비밀번호'), { target: { value: 'short' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '회원가입' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('올바른 이메일 형식을 입력해 주세요.')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('이메일'), { target: { value: ' New@Example.invalid ' } })
+    fireEvent.change(screen.getByLabelText('비밀번호'), { target: { value: 'synthetic-passphrase' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '회원가입' }))
+    expect(await screen.findByRole('dialog', { name: '로그인' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('회원가입이 완료되었습니다. 로그인해 주세요.')
+    expect(sessionStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull()
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ email: 'new@example.invalid', password: 'synthetic-passphrase' })
+  })
+
+  it('logs in, shows the user, and logs out without retaining identity data', async () => {
+    sessionStorage.clear()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ access_token: 'new-token', token_type: 'bearer', expires_in: 900 })))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '로그인' }))
+    fireEvent.change(screen.getByLabelText('이메일'), { target: { value: 'user@example.invalid' } })
+    fireEvent.change(screen.getByLabelText('비밀번호'), { target: { value: 'synthetic-passphrase' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '로그인' }))
+
+    expect(await screen.findByText('user@example.invalid')).toBeInTheDocument()
+    expect(sessionStorage.getItem(ACCESS_TOKEN_KEY)).toBe('new-token')
+    fireEvent.click(screen.getByRole('button', { name: '로그아웃' }))
+    expect(screen.getByRole('button', { name: '로그인' })).toBeInTheDocument()
+    expect(sessionStorage.length).toBe(0)
+  })
+
+  it('blocks anonymous upload without fetching and preserves the selected file', () => {
+    sessionStorage.clear()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    selectFile(new File(['합성 본문'], 'selected.txt'))
+    fireEvent.click(screen.getByRole('button', { name: '문서 업로드' }))
+
+    expect(screen.getByRole('dialog', { name: '로그인' })).toBeInTheDocument()
+    expect(screen.getByText('selected.txt')).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('expires the session and clears protected state on a protected 401', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(successfulDocument))
+      .mockResolvedValueOnce(jsonResponse({ detail: 'not exposed' }, 401))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    await uploadSuccessfulDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분석 시작' }))
+
+    expect(await screen.findByRole('dialog', { name: '로그인' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('로그인 정보가 만료되었습니다. 다시 로그인해 주세요.')
+    expect(screen.queryByRole('heading', { name: '업로드 결과' })).not.toBeInTheDocument()
+    expect(screen.queryByText('not exposed')).not.toBeInTheDocument()
+    expect(sessionStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull()
+  })
+
   it('renders the service name', () => {
     render(<App />)
 
@@ -305,7 +440,7 @@ describe('analysis job flow', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       'http://localhost:8000/documents/document-test/analysis-jobs',
-      { method: 'POST' },
+      expect.objectContaining({ method: 'POST', headers: expect.any(Headers) }),
     )
     expect(
       fetchMock.mock.calls.some(([url]) => String(url).includes('analysis-results')),
@@ -376,7 +511,7 @@ describe('analysis job flow', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       'http://localhost:8000/analysis-jobs/job-test',
-      { method: 'GET' },
+      expect.objectContaining({ method: 'GET', headers: expect.any(Headers) }),
     )
   })
 
@@ -508,7 +643,7 @@ describe('analysis results flow', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       'http://localhost:8000/documents/document-test/analysis-results',
-      { method: 'GET' },
+      expect.objectContaining({ method: 'GET', headers: expect.any(Headers) }),
     )
   })
 

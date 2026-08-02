@@ -25,13 +25,15 @@ describe('uploadDocument', () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse(responsePayload))
     const file = new File(['합성 본문'], 'sample.txt', { type: 'text/plain' })
 
-    await expect(uploadDocument(file, fetcher)).resolves.toEqual(responsePayload)
+    await expect(uploadDocument(file, 'test-token', fetcher)).resolves.toEqual(responsePayload)
 
     expect(fetcher).toHaveBeenCalledOnce()
     const [url, options] = fetcher.mock.calls[0]
     expect(url).toBe('http://localhost:8000/documents/upload')
     expect(options.method).toBe('POST')
-    expect(options.headers).toBeUndefined()
+    const headers = new Headers(options.headers)
+    expect(headers.get('Authorization')).toBe('Bearer test-token')
+    expect(headers.has('Content-Type')).toBe(false)
     expect(options.body).toBeInstanceOf(FormData)
     expect(options.body.get('file')).toBe(file)
   })
@@ -42,7 +44,7 @@ describe('uploadDocument', () => {
     )
 
     await expect(
-      uploadDocument(new File(['x'], 'sample.txt'), fetcher),
+      uploadDocument(new File(['x'], 'sample.txt'), 'test-token', fetcher),
     ).rejects.toMatchObject({
       kind: 'http',
       status: 400,
@@ -54,7 +56,7 @@ describe('uploadDocument', () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('failure', { status: 500 }))
 
     await expect(
-      uploadDocument(new File(['x'], 'sample.txt'), fetcher),
+      uploadDocument(new File(['x'], 'sample.txt'), 'test-token', fetcher),
     ).rejects.toMatchObject({ kind: 'http', status: 500, detail: null })
   })
 
@@ -62,7 +64,7 @@ describe('uploadDocument', () => {
     const fetcher = vi.fn().mockRejectedValue(new TypeError('network unavailable'))
 
     await expect(
-      uploadDocument(new File(['x'], 'sample.txt'), fetcher),
+      uploadDocument(new File(['x'], 'sample.txt'), 'test-token', fetcher),
     ).rejects.toMatchObject({ kind: 'network', status: null })
   })
 
@@ -70,7 +72,7 @@ describe('uploadDocument', () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ document_id: 'incomplete' }))
 
     await expect(
-      uploadDocument(new File(['x'], 'sample.txt'), fetcher),
+      uploadDocument(new File(['x'], 'sample.txt'), 'test-token', fetcher),
     ).rejects.toMatchObject({ kind: 'invalid-response' })
   })
 
@@ -106,7 +108,7 @@ describe('uploadDocument', () => {
       const fetcher = vi.fn().mockResolvedValue(jsonResponse(payload))
 
       await expect(
-        uploadDocument(new File(['x'], 'sample.txt'), fetcher),
+        uploadDocument(new File(['x'], 'sample.txt'), 'test-token', fetcher),
       ).rejects.toBeInstanceOf(ApiError)
     }
   })

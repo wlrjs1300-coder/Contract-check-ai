@@ -13,7 +13,7 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 describe('analysis job API', () => {
-  it('creates a job with an encoded document path and no body or headers', async () => {
+  it('creates a job with an encoded document path, bearer header, and no body', async () => {
     const fetcher = vi.fn().mockResolvedValue(
       jsonResponse({
         ...completedJob,
@@ -21,17 +21,18 @@ describe('analysis job API', () => {
       }),
     )
 
-    await expect(createAnalysisJob('document/id?', fetcher)).resolves.toMatchObject({
+    await expect(createAnalysisJob('document/id?', 'test-token', fetcher)).resolves.toMatchObject({
       status: 'completed',
     })
 
     expect(fetcher).toHaveBeenCalledWith(
       'http://localhost:8000/documents/document%2Fid%3F/analysis-jobs',
-      { method: 'POST' },
+      expect.objectContaining({ method: 'POST', headers: expect.any(Headers) }),
     )
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer test-token')
     const [, options] = fetcher.mock.calls[0]
     expect(options.body).toBeUndefined()
-    expect(options.headers).toBeUndefined()
+    expect(new Headers(options.headers).get('Authorization')).toBe('Bearer test-token')
   })
 
   it.each<AnalysisJobStatus>(['queued', 'processing', 'completed', 'failed'])(
@@ -39,7 +40,7 @@ describe('analysis job API', () => {
     async (status) => {
       const fetcher = vi.fn().mockResolvedValue(jsonResponse({ ...completedJob, status }))
 
-      await expect(createAnalysisJob('document-test', fetcher)).resolves.toMatchObject({
+      await expect(createAnalysisJob('document-test', 'test-token', fetcher)).resolves.toMatchObject({
         status,
       })
     },
@@ -57,7 +58,7 @@ describe('analysis job API', () => {
   ])('rejects an invalid response: $reason', async ({ payload }) => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse(payload))
 
-    await expect(createAnalysisJob('document-test', fetcher)).rejects.toMatchObject({
+    await expect(createAnalysisJob('document-test', 'test-token', fetcher)).rejects.toMatchObject({
       kind: 'invalid-response',
     })
   })
@@ -67,7 +68,7 @@ describe('analysis job API', () => {
       jsonResponse({ detail: 'Document not found.' }, 404),
     )
 
-    await expect(createAnalysisJob('document-test', fetcher)).rejects.toMatchObject({
+    await expect(createAnalysisJob('document-test', 'test-token', fetcher)).rejects.toMatchObject({
       kind: 'http',
       status: 404,
       detail: 'Document not found.',
@@ -77,7 +78,7 @@ describe('analysis job API', () => {
   it('distinguishes a non-JSON HTTP error', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('failure', { status: 500 }))
 
-    await expect(createAnalysisJob('document-test', fetcher)).rejects.toMatchObject({
+    await expect(createAnalysisJob('document-test', 'test-token', fetcher)).rejects.toMatchObject({
       kind: 'http',
       status: 500,
       detail: null,
@@ -87,12 +88,12 @@ describe('analysis job API', () => {
   it('distinguishes a network failure', async () => {
     const fetcher = vi.fn().mockRejectedValue(new TypeError('network unavailable'))
 
-    await expect(createAnalysisJob('document-test', fetcher)).rejects.toMatchObject({
+    await expect(createAnalysisJob('document-test', 'test-token', fetcher)).rejects.toMatchObject({
       kind: 'network',
     })
   })
 
-  it('gets a job using an encoded path and validates both identifiers', async () => {
+  it('gets a job with bearer authorization and validates both identifiers', async () => {
     const fetcher = vi.fn().mockResolvedValue(
       jsonResponse({
         job_id: 'job/id?',
@@ -102,19 +103,20 @@ describe('analysis job API', () => {
     )
 
     await expect(
-      getAnalysisJob('job/id?', 'document-test', fetcher),
+      getAnalysisJob('job/id?', 'document-test', 'test-token', fetcher),
     ).resolves.toMatchObject({ status: 'processing' })
     expect(fetcher).toHaveBeenCalledWith(
       'http://localhost:8000/analysis-jobs/job%2Fid%3F',
-      { method: 'GET' },
+      expect.objectContaining({ method: 'GET', headers: expect.any(Headers) }),
     )
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer test-token')
   })
 
   it('does not request status without a job id', async () => {
     const fetcher = vi.fn()
 
     await expect(
-      getAnalysisJob('', 'document-test', fetcher),
+      getAnalysisJob('', 'document-test', 'test-token', fetcher),
     ).rejects.toMatchObject({ kind: 'invalid-response' })
     expect(fetcher).not.toHaveBeenCalled()
   })
@@ -126,7 +128,7 @@ describe('analysis job API', () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse(payload))
 
     await expect(
-      getAnalysisJob('job-test', 'document-test', fetcher),
+      getAnalysisJob('job-test', 'document-test', 'test-token', fetcher),
     ).rejects.toMatchObject({ kind: 'invalid-response' })
   })
 })

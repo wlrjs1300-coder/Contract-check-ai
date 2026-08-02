@@ -20,25 +20,26 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 describe('analysis results API', () => {
-  it('gets results using an encoded path without a body or headers', async () => {
+  it('gets results using an encoded path with bearer authorization and no body', async () => {
     const fetcher = vi.fn().mockResolvedValue(
       jsonResponse({ ...validResults, document_id: 'document/id?' }),
     )
-    await getAnalysisResults('document/id?', 'job-test', fetcher)
+    await getAnalysisResults('document/id?', 'job-test', 'test-token', fetcher)
     expect(fetcher).toHaveBeenCalledWith(
       'http://localhost:8000/documents/document%2Fid%3F/analysis-results',
-      { method: 'GET' },
+      expect.objectContaining({ method: 'GET', headers: expect.any(Headers) }),
     )
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer test-token')
     const [, options] = fetcher.mock.calls[0]
     expect(options.body).toBeUndefined()
-    expect(options.headers).toBeUndefined()
+    expect(new Headers(options.headers).get('Authorization')).toBe('Bearer test-token')
   })
 
   it.each(['queued', 'processing', 'completed', 'failed'])(
     'accepts the %s status contract',
     async (status) => {
       const fetcher = vi.fn().mockResolvedValue(jsonResponse({ ...validResults, status }))
-      await expect(getAnalysisResults('document-test', 'job-test', fetcher)).resolves.toMatchObject({ status })
+      await expect(getAnalysisResults('document-test', 'job-test', 'test-token', fetcher)).resolves.toMatchObject({ status })
     },
   )
 
@@ -49,7 +50,7 @@ describe('analysis results API', () => {
         ...validResults,
         items: [{ ...validItem, display_label: displayLabel }],
       }))
-      await expect(getAnalysisResults('document-test', 'job-test', fetcher)).resolves.toBeDefined()
+      await expect(getAnalysisResults('document-test', 'job-test', 'test-token', fetcher)).resolves.toBeDefined()
     },
   )
 
@@ -66,7 +67,7 @@ describe('analysis results API', () => {
     ['unexpected shape', { document_id: 'document-test' }],
   ])('rejects $s', async (_reason, payload) => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse(payload))
-    await expect(getAnalysisResults('document-test', 'job-test', fetcher)).rejects.toMatchObject({ kind: 'invalid-response' })
+    await expect(getAnalysisResults('document-test', 'job-test', 'test-token', fetcher)).rejects.toMatchObject({ kind: 'invalid-response' })
   })
 
   it.each(['clause_id', 'reference_id'] as const)(
@@ -76,25 +77,25 @@ describe('analysis results API', () => {
         ...validResults,
         items: [validItem, { ...validItem, [key]: validItem[key], summary: '두 번째 합성 결과' }],
       }))
-      await expect(getAnalysisResults('document-test', 'job-test', fetcher)).rejects.toMatchObject({ kind: 'invalid-response' })
+      await expect(getAnalysisResults('document-test', 'job-test', 'test-token', fetcher)).rejects.toMatchObject({ kind: 'invalid-response' })
     },
   )
 
   it('rejects an empty request identifier before fetching', async () => {
     const fetcher = vi.fn()
-    await expect(getAnalysisResults('', 'job-test', fetcher)).rejects.toMatchObject({ kind: 'invalid-response' })
+    await expect(getAnalysisResults('', 'job-test', 'test-token', fetcher)).rejects.toMatchObject({ kind: 'invalid-response' })
     expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('preserves JSON detail for HTTP errors', async () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ detail: 'Analysis result not found.' }, 404))
-    await expect(getAnalysisResults('document-test', 'job-test', fetcher)).rejects.toMatchObject({ kind: 'http', status: 404, detail: 'Analysis result not found.' })
+    await expect(getAnalysisResults('document-test', 'job-test', 'test-token', fetcher)).rejects.toMatchObject({ kind: 'http', status: 404, detail: 'Analysis result not found.' })
   })
 
   it('distinguishes non-JSON HTTP and network errors', async () => {
     const httpFetcher = vi.fn().mockResolvedValue(new Response('failure', { status: 500 }))
-    await expect(getAnalysisResults('document-test', 'job-test', httpFetcher)).rejects.toMatchObject({ kind: 'http', detail: null })
+    await expect(getAnalysisResults('document-test', 'job-test', 'test-token', httpFetcher)).rejects.toMatchObject({ kind: 'http', detail: null })
     const networkFetcher = vi.fn().mockRejectedValue(new TypeError('unavailable'))
-    await expect(getAnalysisResults('document-test', 'job-test', networkFetcher)).rejects.toMatchObject({ kind: 'network' })
+    await expect(getAnalysisResults('document-test', 'job-test', 'test-token', networkFetcher)).rejects.toMatchObject({ kind: 'network' })
   })
 })

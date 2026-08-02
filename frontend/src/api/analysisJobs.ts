@@ -1,6 +1,7 @@
 import type { AnalysisJob, AnalysisJobStatus } from '../types/analysisJobs'
 import { apiConfig } from './config'
 import { ApiError, readErrorDetail, readJsonResponse } from './http'
+import { authenticatedRequest } from './authenticatedRequest'
 
 type Fetcher = typeof fetch
 
@@ -41,13 +42,15 @@ async function requestAnalysisJob(
   url: string,
   init: RequestInit,
   expected: Readonly<{ documentId: string; jobId?: string }>,
+  accessToken: string,
   fetcher: Fetcher,
 ): Promise<AnalysisJob> {
   let response: Response
 
   try {
-    response = await fetcher(url, init)
-  } catch {
+    response = await authenticatedRequest(fetcher, url, accessToken, init)
+  } catch (error) {
+    if (error instanceof ApiError) throw error
     throw new ApiError('network', 'The analysis job request failed.')
   }
 
@@ -73,6 +76,7 @@ async function requestAnalysisJob(
 
 export async function createAnalysisJob(
   documentId: string,
+  accessToken: string,
   fetcher: Fetcher = fetch,
 ): Promise<AnalysisJob> {
   requireIdentifier(documentId)
@@ -82,6 +86,7 @@ export async function createAnalysisJob(
     `${apiConfig.baseUrl}/documents/${encodedDocumentId}/analysis-jobs`,
     { method: 'POST' },
     { documentId },
+    accessToken,
     fetcher,
   )
 }
@@ -89,6 +94,7 @@ export async function createAnalysisJob(
 export async function getAnalysisJob(
   jobId: string,
   documentId: string,
+  accessToken: string,
   fetcher: Fetcher = fetch,
 ): Promise<AnalysisJob> {
   requireIdentifier(jobId)
@@ -99,6 +105,7 @@ export async function getAnalysisJob(
     `${apiConfig.baseUrl}/analysis-jobs/${encodedJobId}`,
     { method: 'GET' },
     { documentId, jobId },
+    accessToken,
     fetcher,
   )
 }
