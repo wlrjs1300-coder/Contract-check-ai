@@ -55,3 +55,29 @@ def test_production_requires_explicit_boundary_values(monkeypatch) -> None:
     monkeypatch.delenv("MAX_UPLOAD_BYTES", raising=False)
     with pytest.raises(BoundaryConfigurationError):
         get_boundary_config()
+
+
+def test_pilot_requires_every_explicit_boundary_value(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "pilot")
+    for name in (
+        "MAX_UPLOAD_BYTES",
+        "MAX_EXTRACTED_CHARACTERS",
+        "MAX_DOCUMENT_PAGES",
+        "RATE_LIMIT_LOGIN",
+        "RATE_LIMIT_REGISTER",
+        "RATE_LIMIT_UPLOAD",
+        "RATE_LIMIT_EXTRACTION",
+        "RATE_LIMIT_ANALYSIS_JOB",
+        "RATE_LIMIT_WINDOW_SECONDS",
+    ):
+        monkeypatch.setenv(name, "1")
+    monkeypatch.delenv("RATE_LIMIT_WINDOW_SECONDS")
+    with pytest.raises(BoundaryConfigurationError):
+        get_boundary_config()
+
+
+def test_pilot_rejects_boundary_above_maximum(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "pilot")
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024 + 1))
+    with pytest.raises(BoundaryConfigurationError):
+        get_boundary_config()

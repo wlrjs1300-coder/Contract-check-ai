@@ -55,3 +55,42 @@ def test_factory_development_defaults_to_unavailable(monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("APP_ENV", "development")
     provider = create_analysis_provider()
     assert provider.provider_name == "unavailable"
+
+
+def test_pilot_requires_explicit_synthetic_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "pilot")
+    monkeypatch.delenv("ANALYSIS_PROVIDER", raising=False)
+    assert resolve_provider_name() == "not_configured"
+    with pytest.raises(AnalysisProviderConfigError) as exc_info:
+        create_analysis_provider()
+    assert exc_info.value.code == "analysis_provider_forbidden"
+
+
+def test_pilot_allows_only_synthetic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_ENV", "pilot")
+    monkeypatch.setenv("ANALYSIS_PROVIDER", "synthetic")
+    assert create_analysis_provider().provider_name == "synthetic"
+
+
+@pytest.mark.parametrize(
+    "provider_name",
+    [
+        "fake",
+        "default",
+        "unavailable",
+        "real_placeholder",
+        "not_configured",
+        "real",
+        "unknown",
+    ],
+)
+def test_pilot_rejects_every_non_synthetic_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "pilot")
+    with pytest.raises(AnalysisProviderConfigError) as exc_info:
+        create_analysis_provider(provider_name=provider_name)
+    assert exc_info.value.code == "analysis_provider_forbidden"

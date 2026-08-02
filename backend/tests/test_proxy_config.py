@@ -115,3 +115,37 @@ def test_production_proxy_contract_fails_closed(
         monkeypatch.setenv(missing, replacement)
     with pytest.raises(ProxyConfigurationError):
         get_proxy_config()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("TRUST_PROXY_HEADERS", None),
+        ("REQUIRE_HTTPS", None),
+        ("REQUIRE_HTTPS", "false"),
+        ("ALLOWED_HOSTS", None),
+        ("ALLOWED_HOSTS", "*"),
+        ("TRUST_PROXY_HEADERS", "invalid"),
+    ],
+)
+def test_pilot_proxy_contract_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str | None,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    values = {
+        "APP_ENV": "pilot",
+        "TRUST_PROXY_HEADERS": "false",
+        "TRUSTED_PROXY_CIDRS": "",
+        "REQUIRE_HTTPS": "true",
+        "ALLOWED_HOSTS": "pilot.example.invalid",
+    }
+    for key, configured in values.items():
+        monkeypatch.setenv(key, configured)
+    if value is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ProxyConfigurationError):
+        get_proxy_config()

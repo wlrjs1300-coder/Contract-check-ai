@@ -2,6 +2,7 @@
 
 import os
 
+from backend.app.core.runtime_environment import get_app_env
 from backend.app.services.analysis_provider import (
     AnalysisProvider,
     DEFAULT_ANALYSIS_PROVIDER,
@@ -23,14 +24,16 @@ def resolve_provider_name() -> str:
     if configured:
         return configured
 
-    app_env = (os.getenv("APP_ENV", "").strip().lower() or "test")
+    app_env = get_app_env()
     if app_env == "test":
         return "synthetic"
     if app_env == "development":
         return "unavailable"
+    if app_env == "pilot":
+        return "not_configured"
     if app_env in {"prod", "production"}:
         return "not_configured"
-    return "synthetic"
+    return "not_configured"
 
 
 def create_analysis_provider(
@@ -38,8 +41,15 @@ def create_analysis_provider(
     provider_name: str | None = None,
 ) -> AnalysisProvider:
     selected = provider_name or resolve_provider_name()
-    app_env = (os.getenv("APP_ENV", "").strip().lower() or "test")
+    app_env = get_app_env()
     is_prod = app_env in {"prod", "production"}
+    is_pilot = app_env == "pilot"
+
+    if is_pilot and selected != "synthetic":
+        raise AnalysisProviderConfigError(
+            "analysis_provider_forbidden",
+            "configured provider is forbidden in pilot.",
+        )
 
     if selected == "synthetic":
         if is_prod:
@@ -49,7 +59,7 @@ def create_analysis_provider(
             )
         return SyntheticAnalysisProvider()
     if selected == "fake":
-        if is_prod:
+        if is_prod or is_pilot:
             raise AnalysisProviderConfigError(
                 "analysis_provider_forbidden",
                 "fake provider is forbidden in production.",
@@ -78,6 +88,10 @@ def create_analysis_provider(
 
 def is_provider_forbidden_in_env(provider: AnalysisProvider) -> bool:
     provider_name = getattr(provider, "provider_name", "")
-    return provider_name in {"fake", "synthetic"} and (
-        (os.getenv("APP_ENV", "").strip().lower() or "test") == "production"
-    )
+    app_env = get_app_env()
+    if app_env == "pilot":
+        return provider_name != "synthetic"
+    return provider_name in {"fake", "synthetic"} and app_env in {
+        "production",
+        "prod",
+    }

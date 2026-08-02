@@ -737,7 +737,7 @@ def get_ocr_adapter() -> OcrAdapter:
             return LocalKoreanOcrAdapter()
         return SyntheticOcrAdapter()
 
-    if app_env in {"production", "development"} and adapter_mode in {
+    if app_env in {"production", "prod", "pilot", "development"} and adapter_mode in {
         "",
         "local",
         "local_korean",

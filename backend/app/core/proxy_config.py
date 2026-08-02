@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 
+from backend.app.core.runtime_environment import is_strict_environment
 
 class ProxyConfigurationError(RuntimeError):
     """Raised when the ingress trust boundary is invalid."""
@@ -34,10 +35,7 @@ class ProxyConfig:
 
 
 def _is_production() -> bool:
-    return (os.getenv("APP_ENV", "test").strip().lower() or "test") in {
-        "production",
-        "prod",
-    }
+    return is_strict_environment()
 
 
 def _parse_bool(name: str, *, default: bool, production: bool) -> bool:
