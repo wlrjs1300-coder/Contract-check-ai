@@ -8,6 +8,12 @@ from backend.app.core.boundary_config import get_boundary_config
 from backend.app.core.email_lookup import get_email_lookup_key
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.services.analysis_provider_factory import create_analysis_provider
+from backend.app.core.proxy_config import get_proxy_config
+from backend.app.core.runtime_environment import (
+    ALLOWED_APP_ENVS,
+    get_app_env,
+    is_strict_environment,
+)
 
 
 class OperationsConfigurationError(RuntimeError):
@@ -19,7 +25,7 @@ def _safe_error(category: str) -> str:
 
 
 def _normalize_app_env() -> str:
-    return (os.getenv("APP_ENV", "test").strip().lower() or "test")
+    return get_app_env()
 
 
 def _is_true_env_flag(value: str | None) -> bool:
@@ -90,7 +96,7 @@ def _validate_secret_material() -> None:
         raise OperationsConfigurationError(_safe_error("invalid_secret_config"))
 
 
-def _validate_cors_for_production() -> None:
+def _validate_cors_for_strict_environment() -> None:
     cors_env = os.getenv("CORS_ALLOWED_ORIGINS")
     if cors_env is None:
         raise OperationsConfigurationError(_safe_error("invalid_cors_config"))
@@ -101,6 +107,8 @@ def _validate_cors_for_production() -> None:
 
     for origin in origins:
         lowered = origin.lower()
+        if not lowered.startswith("https://"):
+            raise OperationsConfigurationError(_safe_error("invalid_cors_config"))
         if lowered.startswith("http://localhost") or lowered.startswith("https://localhost"):
             raise OperationsConfigurationError(_safe_error("invalid_cors_config"))
         if lowered.startswith("http://127.") or lowered.startswith("https://127."):
@@ -109,7 +117,7 @@ def _validate_cors_for_production() -> None:
             raise OperationsConfigurationError(_safe_error("invalid_cors_config"))
 
 
-def _validate_database_for_production() -> None:
+def _validate_database_for_strict_environment() -> None:
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise OperationsConfigurationError(_safe_error("invalid_database_config"))
@@ -118,44 +126,59 @@ def _validate_database_for_production() -> None:
         raise OperationsConfigurationError(_safe_error("invalid_database_config"))
 
 
-def _validate_debug_controls_for_production() -> None:
+def _validate_debug_controls_for_strict_environment() -> None:
     if _is_true_env_flag(os.getenv("DEBUG")):
         raise OperationsConfigurationError(_safe_error("invalid_debug_config"))
     if _is_true_env_flag(os.getenv("UVICORN_RELOAD")):
         raise OperationsConfigurationError(_safe_error("invalid_debug_config"))
 
 
-def _validate_provider_for_production() -> None:
+def _validate_provider_for_strict_environment() -> None:
     provider_name = (os.getenv("ANALYSIS_PROVIDER") or "").strip().lower()
     if not provider_name:
         raise OperationsConfigurationError(_safe_error("invalid_provider_config"))
-    if provider_name in {"", "synthetic", "fake", "default", "not_configured", "real_placeholder"}:
+
+    app_env = get_app_env()
+    if app_env == "pilot":
+        if provider_name != "synthetic":
+            raise OperationsConfigurationError(_safe_error("invalid_provider_config"))
+    elif provider_name in {
+        "synthetic",
+        "fake",
+        "default",
+        "not_configured",
+        "real_placeholder",
+    }:
         raise OperationsConfigurationError(_safe_error("invalid_provider_config"))
 
     provider = create_analysis_provider()
-    if provider.provider_name not in {"unavailable", "real"}:
+    if app_env == "pilot":
+        if provider.provider_name != "synthetic":
+            raise OperationsConfigurationError(_safe_error("invalid_provider_config"))
+    elif provider.provider_name not in {"unavailable", "real"}:
         raise OperationsConfigurationError(_safe_error("invalid_provider_config"))
 
 
 def validate_runtime_configuration() -> None:
     app_env = _normalize_app_env()
 
-    if app_env not in {"test", "development", "production", "prod"}:
+    if app_env not in ALLOWED_APP_ENVS:
         raise OperationsConfigurationError(_safe_error("invalid_app_env"))
 
     _ = get_jwt_config()
     _ = get_encryption_keyring()
     _ = get_email_lookup_key()
 
-    if app_env in {"test", "development"}:
+    if not is_strict_environment():
         return
 
     validators = (
         (_validate_secret_material, "invalid_secret_config"),
-        (_validate_cors_for_production, "invalid_cors_config"),
-        (_validate_database_for_production, "invalid_database_config"),
-        (_validate_debug_controls_for_production, "invalid_debug_config"),
-        (_validate_provider_for_production, "invalid_provider_config"),
+        (_validate_cors_for_strict_environment, "invalid_cors_config"),
+        (_validate_database_for_strict_environment, "invalid_database_config"),
+        (_validate_debug_controls_for_strict_environment, "invalid_debug_config"),
+        (_validate_provider_for_strict_environment, "invalid_provider_config"),
+        (get_proxy_config, "invalid_proxy_config"),
         (get_boundary_config, "invalid_boundary_config"),
     )
     for validator, category in validators:

@@ -2,9 +2,11 @@
 
 계약 문서를 조항 단위로 분리하고, 개인정보 보호와 출력 검증을 거쳐 위험 신호와 검토 권고를 제공하는 계약서 리스크 관리 MVP입니다.
 
-> **현재 상태: 개발 중 · 기술 검증 MVP**
+> **현재 상태: v0.9.0 운영 준비 및 제한적 합성 데이터 파일럿 완료**
 >
-> 외부 모델을 연결하기 전에 결정론적 합성 Provider로 데이터 전달 경계, 결과 검증, 오류 처리와 Frontend·Backend 통합 구조를 먼저 검증했습니다. 실제 외부 Provider와 운영 환경은 아직 연결하지 않았습니다.
+> production급 strict runtime 계약, HTTPS·Host·CORS·trusted proxy 경계, synthetic Secret lifecycle 및 MySQL backup/restore rehearsal, audit/security event 최소 기반과 격리 synthetic pilot의 인증·ownership·job·result·로그 비노출·종료 cleanup을 검증했습니다. 파일럿 종료 후 pilot Docker 자원은 0건이었습니다.
+>
+> 완료된 범위는 로컬 격리 합성 검증까지입니다. 실제 TLS 종단·proxy 배치, production 배포 플랫폼, 외부 Secret manager/KMS, 외부 observability·alert/on-call, 실제 Provider, 실제 데이터 승인, retention·삭제·복원 방지와 incident response는 완료되지 않았습니다.
 
 ## 핵심 기술 포인트
 
@@ -46,17 +48,20 @@ UTF-8 TXT 선택 및 사전 검증
 
 ### Backend
 
-- FastAPI 기반 8개 REST API
+- FastAPI 기반 REST API와 JWT 인증
+- 사용자별 document·extraction·analysis ownership 및 교차 사용자 접근 차단
 - UTF-8 TXT 한 파일, 최대 1 MiB 입력 검증과 조항 분할
-- 별도 extraction API를 통한 텍스트 PDF 페이지별 직접 추출
+- 별도 extraction API를 통한 텍스트 PDF·이미지 OCR·스캔 PDF 처리와 사용자 확인
 - PDF 확장자·MIME·시그니처·암호화·손상·20 MiB·100페이지 검증
 - 저장소 밖 무작위 temp 경로와 성공·실패 cleanup 검증
-- SQLAlchemy·SQLite 기반 문서, 조항, 작업과 결과 저장
+- SQLAlchemy와 Alembic 기반 schema, 개발용 SQLite 기본값과 production용 MySQL 8.4 Compose
+- AES-256-GCM 저장 암호화, keyring과 HMAC 기반 email lookup
+- DB 기반 durable analysis job, 별도 worker, lease·heartbeat·retry·stale recovery
 - 교체 가능한 Provider 인터페이스와 `SyntheticAnalysisProvider`
 - 개인정보 탐지·마스킹, 잔여 개인정보와 출력 재생성 검사
 - 결과 schema, 허용 라벨과 `reference_id` 검증
 - 법률 확정·보장 표현 차단과 안전한 결과만 저장
-- Provider 오류 분류, 부분 결과 rollback과 실패 상태 보존
+- production runtime 설정 fail-closed, `/health`·`/ready`, structured operational logging
 
 ## 아키텍처
 
@@ -64,8 +69,10 @@ UTF-8 TXT 선택 및 사전 검증
 flowchart LR
     UI[React Frontend] --> API[FastAPI API]
     API --> DOC[TXT Validation and Clause Splitting]
-    DOC --> DB[(SQLite)]
-    API --> PIPE[Analysis Pipeline]
+    DOC --> DB[(SQLAlchemy DB)]
+    API --> JOB[Durable Job]
+    JOB --> WORKER[Analysis Worker]
+    WORKER --> PIPE[Analysis Pipeline]
     PIPE --> MASK[PII Detection and Masking]
     MASK --> SYN[Synthetic Provider]
     SYN --> VALID[Schema and Reference Validation]
@@ -84,7 +91,7 @@ flowchart LR
 | Frontend | React, TypeScript, Vite |
 | UI | Bootstrap 5, CSS |
 | Backend | Python, FastAPI, Uvicorn |
-| Database | SQLAlchemy, SQLite |
+| Database | SQLAlchemy, Alembic, SQLite (개발 기본값), MySQL 8.4 (Compose) |
 | Frontend testing | Vitest, Testing Library, jsdom |
 | Backend testing | pytest, FastAPI TestClient |
 | Quality | ESLint, Ruff |
@@ -105,7 +112,7 @@ cd Contract-check-ai
 ```powershell
 python -m venv backend\.venv
 .\backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-.\backend\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+.\backend\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --no-proxy-headers --host 127.0.0.1 --port 8000
 ```
 
 기본 실행은 저장소 루트에 Git 비추적 SQLite 파일 `contract_check.db`를 생성할 수 있습니다.
@@ -124,17 +131,29 @@ npm.cmd run dev
 - Backend health: `http://localhost:8000/health`
 - API 문서: `http://localhost:8000/docs`
 
-별도 환경변수 없이 기본값으로 실행할 수 있으며 실제 `.env` 파일은 커밋하지 않습니다.
+API startup에는 `DATABASE_URL`, `JWT_SECRET`, `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID`, `EMAIL_LOOKUP_HMAC_KEY`가 필요합니다. worker는 DB와 data encryption keyring만, migration은 DB 연결만 필요합니다. 개발용 합성값은 현재 PowerShell 세션에만 주입하고 실제 `.env` 파일이나 실제 Secret은 커밋하지 않습니다. 변수 이름만 제공하는 [`.env.example`](.env.example)과 제품 중립 [Secret lifecycle runbook](docs/deployment/secret-lifecycle-runbook.md)을 기준으로 주입 범위와 교체 영향을 확인합니다.
 
 ### 환경변수
 
-| 이름 | 목적 | 기본값 | Secret 여부 |
-|---|---|---|---|
-| `DATABASE_URL` | SQLAlchemy DB 연결 | `sqlite:///./contract_check.db` | 연결 정보에 따라 달라짐 |
-| `CORS_ALLOWED_ORIGINS` | 허용 Frontend origin | `http://localhost:5173` | 아님 |
-| `VITE_API_BASE_URL` | 브라우저가 호출할 API 주소 | `http://localhost:8000` | 아님 |
+개발 기본값과 production Compose 요구사항은 다릅니다. `APP_ENV=production`에서는 SQLite, 누락된 운영 경계값, 약한 Secret, 부적절한 CORS와 허용되지 않은 Provider 설정을 거부합니다.
 
-`CORS_ALLOWED_ORIGINS`는 쉼표로 여러 origin을 받을 수 있지만 wildcard를 거부합니다. `VITE_` 변수는 브라우저에 노출될 수 있으므로 비밀값을 넣지 않습니다.
+| 분류 | 이름 | 목적 | production 원칙 |
+|---|---|---|---|
+| 실행 설정 | `APP_ENV` | test/development/production 구분 | `production` 또는 `prod`를 명시 |
+| Secret | `DATABASE_URL` | SQLAlchemy DB 연결 | API·worker·migrate에만 주입하고 production SQLite 금지 |
+| Secret | `DATA_ENCRYPTION_KEYS_JSON`, `DATA_ENCRYPTION_ACTIVE_KEY_ID` | 저장 암호화 keyring | API·worker에만 저장·주입 |
+| Secret | `JWT_SECRET`, `EMAIL_LOOKUP_HMAC_KEY` | JWT 서명과 email lookup | API에만 주입하고 서로 독립된 강한 값 사용 |
+| 공개 운영 설정 | `CORS_ALLOWED_ORIGINS`, `ANALYSIS_PROVIDER` | 허용 origin과 Provider 모드 | 명시값 필수, wildcard와 synthetic/fake Provider 금지 |
+| API ingress 설정 | `TRUST_PROXY_HEADERS`, `TRUSTED_PROXY_CIDRS` | API forwarded metadata 신뢰 경계 | 기본 불신, wildcard 금지, Uvicorn proxy 처리 비활성화 |
+| API ingress 설정 | `REQUIRE_HTTPS`, `ALLOWED_HOSTS` | API HTTPS와 Host 검증 | production API에서 HTTPS와 명시 Host 필수 |
+| 경계 설정 | `MAX_UPLOAD_BYTES`, `MAX_EXTRACTED_CHARACTERS`, `MAX_DOCUMENT_PAGES` | 업로드·추출 상한 | Compose에서 명시 |
+| 경계 설정 | `RATE_LIMIT_LOGIN`, `RATE_LIMIT_REGISTER`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_EXTRACTION`, `RATE_LIMIT_ANALYSIS_JOB`, `RATE_LIMIT_WINDOW_SECONDS` | 프로세스 단위 요청 제한 | Compose에서 명시 |
+| DB 컨테이너 | `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` | MySQL 초기화 | password는 Secret, API에 노출 금지 |
+| Frontend 공개 설정 | `VITE_API_BASE_URL` | 브라우저의 API 주소 | 공개 HTTPS URL만 사용, Secret 금지 |
+
+`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, worker polling·lease·heartbeat 설정과 temp/orphan cleanup 설정은 코드에 선택적 기본값이 있습니다. tracked file 경계 검사는 `scripts/validate_secret_boundaries.py`, 실제 값 없는 교체 rehearsal은 `scripts/secret_rotation_rehearsal.py`로 실행합니다. 외부 Secret 저장소와 실제 production rotation은 아직 확정·완료되지 않았습니다.
+
+MySQL backup·restore의 범위, artifact 격리, migration 중단 조건과 restore 검증 순서는 [MySQL backup/restore runbook](docs/deployment/mysql-backup-restore-runbook.md)을 따릅니다. `scripts/mysql_backup_rehearsal.py`와 `scripts/mysql_restore_rehearsal.py`는 기존 `mysql-data` volume이나 host 3306을 사용하지 않는 격리 synthetic rehearsal이며 실제 production backup, retention, offsite 저장소나 PITR 완료를 뜻하지 않습니다.
 
 임시 DB가 필요하면 Backend 실행 전에 PowerShell 세션에서 지정할 수 있습니다.
 
@@ -163,7 +182,7 @@ npm.cmd run build
 .\backend\.venv\Scripts\python.exe -m ruff check backend
 ```
 
-v0.4.6 통합 검증 결과:
+과거 v0.4.6 통합 검증 기록:
 
 - Frontend: 테스트 파일 8개, 테스트 105개 통과
 - Backend: 테스트 53개 통과
@@ -172,11 +191,24 @@ v0.4.6 통합 검증 결과:
 - Chrome에서 두 문서의 업로드·분석·전환과 네트워크 오류 재시도 검증
 - 320px, 375px, 576px, 768px viewport 검증
 
+현재 기준 확인 기록:
+
+- Backend: 743개 통과, 10개 건너뜀, Starlette/httpx deprecation warning 1건
+- Frontend: 테스트 파일 8개, 테스트 110개 통과; lint와 production build 통과
+- Ruff와 pip check 통과
+- Secret·backup·pilot boundary validator 통과
+- Secret rotation, MySQL backup·restore, observability와 isolated synthetic pilot rehearsal 통과
+- synthetic pilot 종료 후 pilot container·network·volume 잔존 0건
+
+위 수치는 v0.9.0 PR-1~PR-6 완료 시점의 최종 검증 기록이다.
+
 ## 현재 범위와 한계
 
-현재 분석 UI와 기존 조항 분석 흐름은 UTF-8 TXT 한 파일을 최대 1 MiB까지 처리합니다. Backend에는 텍스트 레이어 PDF를 최대 20 MiB·100페이지까지 직접 추출하는 별도 extraction resource가 추가됐지만, 결과는 사용자 검토 필요 상태에 머물며 아직 UI·조항 분리·분석과 연결되지 않습니다. 이미지 OCR, 스캔 PDF OCR, 실제 외부 Provider, 인증·인가, 사용자별 이력, 운영 DB와 배포는 구현하지 않았습니다. 분석은 작업 생성 요청 안에서 동기 실행되며 자동 폴링과 프로세스 재시작 후 복구를 지원하지 않습니다.
+현재 분석 UI의 직접 업로드 흐름은 UTF-8 TXT 한 파일을 최대 1 MiB까지 처리합니다. Backend extraction API에는 텍스트 PDF, 이미지 OCR과 스캔 PDF 처리·확인 흐름이 존재하지만 모든 형식이 동일한 Frontend 사용자 흐름으로 통합된 것은 아닙니다.
 
-업로드 파일 자체는 저장하지 않지만 분리된 조항 본문은 SQLite에 저장됩니다. 현재 인증과 사용자 격리가 없으므로 실제 계약서나 실제 개인정보를 입력하면 안 됩니다. Provider 전달 전 마스킹과 출력 검증은 규칙 기반 기술 검증이며 모든 개인정보나 위험 조항 탐지를 보장하지 않습니다.
+개발 기본 실행은 SQLite를 사용할 수 있습니다. production runtime은 SQLite를 거부하며 Compose는 MySQL 8.4, Alembic migration one-shot, API와 worker 분리를 사용합니다. Forwarded header는 기본적으로 신뢰하지 않고 명시된 proxy CIDR에서만 제한적으로 해석하며 production은 HTTPS와 Host 검증을 요구합니다. 제품 중립 backup/restore runbook과 격리 synthetic rehearsal은 완료됐지만 실제 retention, offsite storage, artifact 저장 암호화·key custody, PITR와 production restore는 미완료입니다. 실제 TLS 종단과 proxy 배치, 외부 Secret 저장소, 외부 observability와 실제 배포 플랫폼도 미완료 또는 미확정입니다.
+
+JWT 인증, 사용자별 ownership과 저장 암호화가 구현됐더라도 실제 계약서나 실제 개인정보 사용이 승인된 것은 아닙니다. 실제 외부 Provider adapter도 연결되지 않았습니다. Provider 전달 전 마스킹과 출력 검증은 규칙 기반 기술 검증이며 모든 개인정보나 위험 조항 탐지를 보장하지 않습니다. 별도 보안·개인정보 검토 전에는 명백한 합성 데이터만 사용합니다.
 
 ## 상세 문서
 
@@ -188,3 +220,27 @@ v0.4.6 통합 검증 결과:
 ## 면책
 
 현재 결과는 합성 Provider를 사용한 기술 검증 결과이며 실제 외부 분석 품질을 검증한 것이 아닙니다. 이 프로젝트는 법률 자문이나 최종 판단을 제공하지 않으며 적법성, 위법성, 무효 여부 또는 계약서의 안전을 확정하지 않습니다.
+
+## v0.9.0 감사·관측성 최소 기반
+
+운영 진단용 `operational`, 허용된 주체 행동용 `audit`, 차단·거부 판단용
+`security` JSON event를 구분한다. 인증, owner-scoped 접근 미허용, rate limit,
+readiness, cleanup과 worker lifecycle event를 안전한 고정 code로 기록한다.
+내부 사용자 ID는 도메인 분리 SHA-256 파생값으로만 표시한다.
+
+표준 라이브러리 기반 metric은 process-local이며 replica 간 집계를 보장하지
+않는다. `scripts/observability_rehearsal.py`의 alert threshold는 synthetic
+rehearsal 전용이고 production 승인값이 아니다. 외부 collector, 실제 경보,
+보존 기간, WORM/hash-chain, on-call 연동은 아직 구현 또는 확정되지 않았다.
+상세 경계는 [audit observability runbook](docs/deployment/audit-observability-runbook.md)을
+따른다. 이는 실제 계약서나 개인정보 사용 승인이 아니다.
+
+## v0.9.0 제한적 합성 파일럿
+
+`APP_ENV=pilot`은 production과 같은 HTTPS·Host·CORS·Secret·MySQL·proxy·boundary
+검증을 적용하면서 명시적 synthetic Provider만 허용한다. fake와 실제 외부
+Provider, synthetic OCR/PDF는 허용하지 않는다. 전용 Compose override와
+rehearsal은 합성 계정·UTF-8 TXT만 사용하고 종료 시 고유 pilot 자원을 폐기한다.
+
+실행 계약은 [synthetic pilot runbook](docs/deployment/synthetic-pilot-runbook.md)을
+따른다. 이는 production 배포, 실제 데이터 또는 실제 Provider 사용 승인이 아니다.

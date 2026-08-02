@@ -38,6 +38,10 @@ def _production_env(monkeypatch) -> dict[str, str]:
         "RATE_LIMIT_EXTRACTION": "20",
         "RATE_LIMIT_ANALYSIS_JOB": "10",
         "RATE_LIMIT_WINDOW_SECONDS": "60",
+        "TRUST_PROXY_HEADERS": "false",
+        "TRUSTED_PROXY_CIDRS": "",
+        "REQUIRE_HTTPS": "true",
+        "ALLOWED_HOSTS": "contracts.example.invalid",
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
@@ -68,6 +72,9 @@ def _production_env(monkeypatch) -> dict[str, str]:
         ("CORS_ALLOWED_ORIGINS", "http://127.0.0.1:5173", "invalid_cors_config"),
         ("DEBUG", "true", "invalid_debug_config"),
         ("UVICORN_RELOAD", "true", "invalid_debug_config"),
+        ("REQUIRE_HTTPS", "false", "invalid_proxy_config"),
+        ("ALLOWED_HOSTS", "*", "invalid_proxy_config"),
+        ("TRUST_PROXY_HEADERS", "maybe-private-setting", "invalid_proxy_config"),
     ],
 )
 def test_production_rejects_unsafe_configuration(
@@ -97,6 +104,46 @@ def test_unknown_app_env_is_rejected_without_echo(monkeypatch) -> None:
 def test_safe_production_configuration_passes(monkeypatch) -> None:
     _production_env(monkeypatch)
     validate_runtime_configuration()
+
+
+def test_safe_pilot_configuration_passes(monkeypatch) -> None:
+    _production_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "pilot")
+    monkeypatch.setenv("ANALYSIS_PROVIDER", "synthetic")
+    validate_runtime_configuration()
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "category"),
+    [
+        ("JWT_SECRET", "placeholder-placeholder-placeholder-00", "invalid_secret_config"),
+        ("DATABASE_URL", "sqlite:///pilot.db", "invalid_database_config"),
+        ("CORS_ALLOWED_ORIGINS", "http://pilot.example.invalid", "invalid_cors_config"),
+        ("CORS_ALLOWED_ORIGINS", "https://localhost", "invalid_cors_config"),
+        ("DEBUG", "true", "invalid_debug_config"),
+        ("UVICORN_RELOAD", "true", "invalid_debug_config"),
+        ("REQUIRE_HTTPS", "false", "invalid_proxy_config"),
+        ("ALLOWED_HOSTS", "", "invalid_proxy_config"),
+        ("MAX_UPLOAD_BYTES", "", "invalid_boundary_config"),
+    ],
+)
+def test_pilot_rejects_non_strict_configuration(
+    monkeypatch,
+    key: str,
+    value: str,
+    category: str,
+) -> None:
+    configured = _production_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "pilot")
+    monkeypatch.setenv("ANALYSIS_PROVIDER", "synthetic")
+    monkeypatch.setenv(key, value)
+    with pytest.raises(OperationsConfigurationError) as exc_info:
+        validate_runtime_configuration()
+    message = str(exc_info.value)
+    assert category in message
+    if value:
+        assert value not in message
+    assert configured["JWT_SECRET"] not in message
 
 
 @pytest.mark.parametrize("app_env", ["test", "development", ""])

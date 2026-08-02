@@ -14,6 +14,8 @@ from fastapi import Depends, HTTPException, Request
 from backend.app.core.auth import get_current_user
 from backend.app.core.boundary_config import get_boundary_config
 from backend.app.core.logging import log_event
+from backend.app.core.proxy_config import get_proxy_config
+from backend.app.core.request_context import build_client_context
 from backend.app.db.models import User
 
 
@@ -97,6 +99,13 @@ def _reject(request: Request, bucket: str, decision: RateLimitDecision) -> None:
         status=429,
         request_id=getattr(request.state, "request_id", None),
         safe_error_code="RATE_LIMIT_EXCEEDED",
+        event_category="security",
+        severity="warning",
+        outcome="blocked",
+        action_code=bucket,
+        status_code=429,
+        block_reason_code="RATE_LIMIT_EXCEEDED",
+        alert_candidate=True,
         extra={"rate_limit_bucket": bucket},
     )
     raise HTTPException(
@@ -112,8 +121,13 @@ def _reject(request: Request, bucket: str, decision: RateLimitDecision) -> None:
 def enforce_public_rate_limit(bucket: str):
     def dependency(request: Request) -> None:
         config = get_boundary_config()
-        host = request.client.host if request.client else "unknown"
-        key = f"{bucket}:{_opaque_key(host)}"
+        client_context = getattr(request.state, "client_context", None)
+        if client_context is None:
+            client_context = build_client_context(
+                request,
+                get_proxy_config(enforce_production=False),
+            )
+        key = f"{bucket}:{_opaque_key(client_context.client_ip)}"
         decision = rate_limiter.check(
             key,
             limit=getattr(config, _BUCKET_LIMIT_ATTRIBUTE[bucket]),

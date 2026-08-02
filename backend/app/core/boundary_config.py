@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from backend.app.core.runtime_environment import is_strict_environment
 
 class BoundaryConfigurationError(RuntimeError):
     """Raised when request-boundary limits are missing or unsafe."""
@@ -61,10 +62,7 @@ def _read_positive_int(name: str, *, production: bool) -> int:
 
 
 def get_boundary_config() -> BoundaryConfig:
-    production = (os.getenv("APP_ENV", "test").strip().lower() or "test") in {
-        "production",
-        "prod",
-    }
+    production = is_strict_environment()
     values = {
         name.lower(): _read_positive_int(name, production=production)
         for name in _DEFAULTS

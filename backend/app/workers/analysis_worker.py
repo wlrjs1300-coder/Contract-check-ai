@@ -19,7 +19,7 @@ from backend.app.services.analysis_job_queue import (
     claim_next_job,
     finish_job_failure,
     finish_job_success,
-    recover_stale_jobs,
+    recover_stale_jobs_result,
     renew_job_lease,
 )
 from backend.app.services.analysis_pipeline import run_analysis_pipeline
@@ -110,6 +110,17 @@ def process_job(job_id: str, config: WorkerConfig) -> str:
                 or job.status != "running"
                 or job.worker_id != config.worker_id
             ):
+                log_event(
+                    logger=logger,
+                    event="analysis_job_claim_lost",
+                    service="worker",
+                    status="failed",
+                    worker_id=config.worker_id,
+                    job_id=job_id,
+                    event_category="operational",
+                    outcome="failed",
+                    safe_error_code="ANALYSIS_CLAIM_LOST",
+                )
                 return "claim_lost"
             db.execute(
                 delete(AnalysisResultItem).where(
@@ -143,7 +154,15 @@ def process_job(job_id: str, config: WorkerConfig) -> str:
                 )
                 log_event(
                     logger=logger,
-                    event="analysis_job_failure",
+                    event=(
+                        "analysis_job_retry_scheduled"
+                        if outcome == "pending"
+                        else (
+                            "analysis_job_claim_lost"
+                            if outcome == "claim_lost"
+                            else "analysis_job_failed_terminal"
+                        )
+                    ),
                     service="worker",
                     status=outcome,
                     worker_id=config.worker_id,
@@ -151,18 +170,23 @@ def process_job(job_id: str, config: WorkerConfig) -> str:
                     attempt_count=attempts,
                     duration_ms=int((time.perf_counter() - started) * 1000),
                     safe_error_code=safe_error_code,
+                    event_category="operational",
+                    outcome="scheduled" if outcome == "pending" else "failed",
+                    alert_candidate=outcome == "failed",
                 )
                 return outcome
 
         log_event(
             logger=logger,
-            event="analysis_job_finished",
+            event="analysis_job_completed",
             service="worker",
             status=outcome,
             worker_id=config.worker_id,
             job_id=job_id,
             attempt_count=attempts,
             duration_ms=int((time.perf_counter() - started) * 1000),
+            event_category="operational",
+            outcome="success",
         )
         return outcome
     finally:
@@ -188,7 +212,30 @@ def run_worker(
     )
     while not shutdown.is_set():
         with SessionLocal() as db:
-            recover_stale_jobs(db)
+            recovery = recover_stale_jobs_result(db)
+            if recovery.retried_count:
+                log_event(
+                    logger=logger,
+                    event="analysis_job_stale_recovered",
+                    service="worker",
+                    status="scheduled",
+                    worker_id=worker_config.worker_id,
+                    attempt_count=recovery.retried_count,
+                    outcome="scheduled",
+                    alert_candidate=recovery.retried_count > 1,
+                )
+            if recovery.failed_count:
+                log_event(
+                    logger=logger,
+                    event="analysis_job_stale_failed",
+                    service="worker",
+                    status="failed",
+                    worker_id=worker_config.worker_id,
+                    attempt_count=recovery.failed_count,
+                    outcome="failed",
+                    safe_error_code="MAX_ATTEMPTS_EXCEEDED",
+                    alert_candidate=True,
+                )
             job = claim_next_job(
                 db,
                 worker_id=worker_config.worker_id,

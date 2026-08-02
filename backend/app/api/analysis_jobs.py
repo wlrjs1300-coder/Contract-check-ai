@@ -3,7 +3,7 @@ from datetime import datetime
 from hashlib import sha256
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from backend.app.db.database import get_db
 from backend.app.core.auth import get_current_user
 from backend.app.core.rate_limit import enforce_user_rate_limit
+from backend.app.core.security_events import log_access_not_granted
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.db.models import AnalysisJob, Clause, Document, Extraction, User
 from backend.app.services.clause_splitter import split_clauses_with_snapshot
@@ -143,6 +144,7 @@ def _get_extraction_ready_for_analysis(
     current_user: User,
     *,
     if_match: str | None,
+    request: Request | None = None,
 ) -> Extraction:
     statement = (
         select(Extraction)
@@ -155,6 +157,16 @@ def _get_extraction_ready_for_analysis(
     extraction = db.scalar(statement)
 
     if extraction is None:
+        log_access_not_granted(
+            request_id=(
+                getattr(request.state, "request_id", None)
+                if request is not None
+                else None
+            ),
+            user_id=current_user.id,
+            target_type="extraction",
+            action_code="create_analysis_job",
+        )
         raise HTTPException(
             status_code=404,
             detail="Extraction not found.",
@@ -401,6 +413,7 @@ def _load_or_create_analysis_document(
 )
 def create_analysis_job(
     document_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
@@ -415,6 +428,12 @@ def create_analysis_job(
     document = db.scalar(statement)
 
     if document is None:
+        log_access_not_granted(
+            request_id=getattr(request.state, "request_id", None),
+            user_id=current_user.id,
+            target_type="document",
+            action_code="create_analysis_job",
+        )
         raise HTTPException(
             status_code=404,
             detail="Document not found.",
@@ -443,6 +462,7 @@ def create_analysis_job(
 )
 def create_extraction_analysis_job(
     extraction_id: str,
+    request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -452,6 +472,7 @@ def create_extraction_analysis_job(
         db,
         current_user,
         if_match=if_match,
+        request=request,
     )
 
     document_id = _load_or_create_analysis_document(
@@ -497,6 +518,7 @@ def create_extraction_analysis_job(
 @router.get("/analysis-jobs/{job_id}")
 def get_analysis_job(
     job_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
@@ -511,6 +533,12 @@ def get_analysis_job(
     job = db.scalar(statement)
 
     if job is None:
+        log_access_not_granted(
+            request_id=getattr(request.state, "request_id", None),
+            user_id=current_user.id,
+            target_type="analysis_job",
+            action_code="read",
+        )
         raise HTTPException(
             status_code=404,
             detail="Analysis job not found.",

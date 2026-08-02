@@ -19,7 +19,14 @@ from backend.app.core.config import get_jwt_config
 from backend.app.core.encryption_config import get_encryption_keyring
 from backend.app.core.email_lookup import get_email_lookup_key
 from backend.app.core.logging import configure_logging, log_event
+from backend.app.core.security_events import emit_security_event
 from backend.app.core.operations_config import validate_runtime_configuration
+from backend.app.core.proxy_config import get_proxy_config
+from backend.app.core.request_context import (
+    build_client_context,
+    is_loopback_peer,
+    normalized_host,
+)
 from backend.app.services.extraction_orphan_cleanup import OrphanCleanupError, sweep_orphan_request_directories
 from backend.app.services.readiness import ReadinessError, get_readiness_status
 
@@ -96,6 +103,28 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
         "failed_count": sweep_result.failed_count,
         "status_codes": dict(sweep_result.status_codes),
     }
+    if sweep_result.failed_count:
+        emit_security_event(
+            event="orphan_cleanup_failed",
+            event_category="operational",
+            outcome="failed",
+            request_id=None,
+            actor_type="system",
+            severity="error",
+            safe_error_code="ORPHAN_CLEANUP_FAILED",
+            alert_candidate=True,
+        )
+    if sweep_result.skipped_unsafe_count:
+        emit_security_event(
+            event="orphan_cleanup_unsafe_skipped",
+            event_category="security",
+            outcome="blocked",
+            request_id=None,
+            actor_type="system",
+            severity="warning",
+            safe_error_code="ORPHAN_CLEANUP_UNSAFE_TARGET",
+            alert_candidate=True,
+        )
     yield
 
 
@@ -114,6 +143,47 @@ async def request_logging_middleware(request: Request, call_next):
     start = time.perf_counter()
 
     logger = logging.getLogger("api")
+    proxy_config = get_proxy_config(enforce_production=False)
+    client_context = build_client_context(request, proxy_config)
+    request.state.client_context = client_context
+    internal_health_request = (
+        request.url.path in {"/health", "/ready"}
+        and is_loopback_peer(client_context)
+        and not client_context.forwarded_used
+    )
+
+    if not internal_health_request:
+        host = normalized_host(request)
+        if proxy_config.allowed_hosts and host not in proxy_config.allowed_hosts:
+            log_event(
+                logger=logger,
+                event="ingress_rejected",
+                service="api",
+                status=400,
+                request_id=request_id,
+                safe_error_code="INVALID_REQUEST_HOST",
+            )
+            response = JSONResponse(
+                status_code=400,
+                content={"detail": "Invalid request host."},
+            )
+            response.headers[_REQUEST_ID_HEADER] = request_id
+            return response
+        if proxy_config.require_https and client_context.scheme != "https":
+            log_event(
+                logger=logger,
+                event="ingress_rejected",
+                service="api",
+                status=426,
+                request_id=request_id,
+                safe_error_code="HTTPS_REQUIRED",
+            )
+            response = JSONResponse(
+                status_code=426,
+                content={"detail": "HTTPS is required."},
+            )
+            response.headers[_REQUEST_ID_HEADER] = request_id
+            return response
 
     try:
         response = await call_next(request)
@@ -165,10 +235,22 @@ def health_check() -> dict[str, str]:
 
 
 @app.get("/ready")
-def readiness_check() -> dict[str, str]:
+def readiness_check(request: Request) -> dict[str, str]:
     try:
         status = get_readiness_status()
-    except ReadinessError:
+    except ReadinessError as exc:
+        safe_code = getattr(exc, "code", None) or "READINESS_CHECK_FAILED"
+        emit_security_event(
+            event="readiness_failed",
+            event_category="operational",
+            outcome="failed",
+            request_id=getattr(request.state, "request_id", None),
+            actor_type="system",
+            severity="error",
+            status_code=503,
+            safe_error_code=safe_code,
+            alert_candidate=True,
+        )
         return JSONResponse(
             status_code=503,
             content={"status": "not_ready"},

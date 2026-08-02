@@ -336,15 +336,17 @@ v1.0 최초 구현과 기술 검증은 근로계약서 1종을 우선한다. 전
 | v0.7.0 | Analysis Provider 기반 | 완료 |
 | v0.7.1 | Provider PII 게이트 | 완료 |
 | v0.7.2 | 데이터 생명주기·보안 경계 설계 | 완료 |
-| v0.7.3 | 원본·임시 데이터 파기 보장 | 진행 중 |
-| v0.7.4 | 인증·소유권·사용자 격리 | 예정 |
-| v0.7.5 | 저장 암호화·키 관리 | 예정 |
+| v0.7.3 | 원본·임시 데이터 파기 보장 | 완료 |
+| v0.7.4 | 인증·소유권·사용자 격리 | 완료 |
+| v0.7.5 | 저장 암호화·키 관리 기반 | 완료 |
 | v0.7.6 | 비식별 데이터 기반 실제 Provider | 예정 |
 | v0.7.7 | 로컬 LLM 옵션 검증 | 예정 |
 | v0.7.8 | 독립 보안 평가 | 예정 |
-| v0.8 | 보안 상태 기반 사용자 화면·이력·삭제 UX | 예정 |
-| v0.9 | 운영 DB·HTTPS·Secret·모니터링·제한적 파일럿 배포 | 예정 |
+| v0.8.0 | durable jobs·운영 배포 기반·경계 보호 | 완료 |
+| v0.9.0 | 운영 준비와 제한적 합성 데이터 파일럿 | PR-1~PR-6 완료, release closure 진행 중 |
 | v1.0 | 파일럿 검증 완료·포트폴리오 릴리스 | 예정 |
+
+현재 작업 기준은 `docs/roadmaps/v0.9.0-operations-pilot-roadmap.md`다. v0.7.5 완료는 application-level 저장 암호화 기반을 뜻하며 외부 Secret 저장소, 운영 key rotation·재암호화·폐기와 실제 데이터 migration 승인을 포함하지 않는다. v0.8.0 완료는 로컬 Docker/MySQL synthetic smoke를 포함하지만 production 배포 완료를 뜻하지 않는다.
 
 ### v0.7.0 완료 범위
 
@@ -383,7 +385,14 @@ v1.0 최초 구현과 기술 검증은 근로계약서 1종을 우선한다. 전
 - 사용자 확인 기반 extraction 흐름
 - page·block·clause·evidence 연결
 - 문서·조항·분석 작업·결과 영속화
-- SQLAlchemy·SQLite
+- SQLAlchemy, 개발용 SQLite 기본값, MySQL 8.4 Compose
+- Alembic revision `0001`~`0006`과 migration one-shot
+- JWT 인증, 사용자별 ownership과 IDOR 방어
+- AES-256-GCM 저장 암호화, keyring과 HMAC email lookup
+- 원본·임시 파일 cleanup과 orphan sweep
+- DB 기반 durable analysis jobs와 별도 worker
+- health/readiness, production 설정 fail-closed
+- structured operational logging과 경계별 rate limit
 - Analysis Provider contract/factory
 - Synthetic·Fake Provider
 - Provider 오류·retry 기반
@@ -394,28 +403,26 @@ v1.0 최초 구현과 기술 검증은 근로계약서 1종을 우선한다. 전
 - customer-value 결과 구조
 - pytest·Ruff 검증
 
-인증, 실제 Provider 연동, 운영 DB, 운영 배포는 현재 범위에서 완료 처리하지 않는다.
+실제 Provider 연동, 실제 데이터 승인과 production 배포는 현재 범위에서 완료 처리하지 않는다.
 
 ### 현재 미구현 범위
 
-- 인증·인가
-- 사용자별 document ownership
-- IDOR 방어
-- 원본·임시 데이터 생명주기 구현
-- orphan cleanup
 - 사용자 삭제·탈퇴·만료 파기
-- 저장 데이터 암호화
-- 암호화 키 관리·교체
+- 운영 key inventory·재암호화·rotation·폐기
 - 실제 외부 Provider adapter
 - Provider별 실제 prompt·response adapter
 - 실제 Provider별 timeout·retry·비용 제한 운영 설정
 - Provider 데이터 처리 정책 승인
 - 로컬 LLM adapter 및 품질 평가
-- 운영 DB와 migration
-- HTTPS·Secret 관리
-- 운영 모니터링·감사
-- 제한적 파일럿 배포
+- 실제 TLS 종단과 proxy/network 배치
+- 외부 Secret 저장소와 production credential custody
+- 실제 backup retention·offsite storage·PITR·production restore
+- 외부 observability collector, 실제 보존·무결성·alert channel·on-call
+- 실제 배포 플랫폼
+- production 배포와 실제 데이터 파일럿
 - 독립 보안 평가
+
+HTTPS·trusted proxy 애플리케이션 계약, synthetic Secret lifecycle, synthetic backup/restore, audit/security event 최소 기반과 로컬 격리 synthetic pilot rehearsal은 v0.9.0 PR-2~PR-6에서 완료됐다.
 
 `timeout·retry`는 기반 구현은 존재하나, 실제 Provider 운영 설정 및 비용 제어 정책이 미완성인 상태로 구분한다.
 
@@ -426,14 +433,10 @@ v1.0 최초 구현과 기술 검증은 근로계약서 1종을 우선한다. 전
 
 파일럿 허용 전 필수 조건:
 
-- 인증
-- 사용자별 소유권
-- IDOR 차단
+- 인증·사용자별 소유권·IDOR 차단 회귀 확인
 - TLS
-- 임시 파일 파기
-- orphan cleanup
-- 저장 암호화
-- 키 관리
+- 임시 파일 파기·orphan cleanup 운영 확인
+- 저장 암호화와 운영 key lifecycle 확인
 - 사용자 삭제
 - 탈퇴·만료 파기
 - PII 독립 평가
@@ -477,8 +480,12 @@ v1.0 최초 구현과 기술 검증은 근로계약서 1종을 우선한다. 전
 
 #### 다음 작업
 
-- v0.7.2 데이터 생명주기·위협 모델 문서 검증 완료
-- v0.7.3 원본·임시 데이터 파기 구현 진행 중
+- PR #90~#95의 `develop` 병합과 v0.9.0 PR-1~PR-6 완료를 기준으로 release closure 문서를 확정한다.
+- closure PR을 `develop`에 병합한 뒤 `develop`→`main` 정식 릴리스 PR을 진행한다.
+- `main` merge commit을 확인한 뒤 v0.9.0 annotated tag를 생성·push한다.
+- main 릴리스 계보를 `develop`에 다시 동기화한 뒤 v1.0 후속 릴리스 정리로 이동한다.
+
+이 절차 중 closure PR 병합, `develop`→`main` 병합, tag 생성과 계보 동기화는 아직 완료되지 않았다. HTTPS·trusted proxy 애플리케이션 계약, synthetic Secret lifecycle, synthetic backup/restore, audit/security event 최소 기반과 isolated synthetic pilot rehearsal은 완료됐지만 production 배포와 실제 데이터 사용 승인을 의미하지 않는다.
 
 ## 15. 변경 가능성
 
