@@ -229,3 +229,13 @@ rehearsal 전용이고 production 승인값이 아니다. 외부 collector, 실�
 보존 기간, WORM/hash-chain, on-call 연동은 아직 구현 또는 확정되지 않았다.
 상세 경계는 [audit observability runbook](docs/deployment/audit-observability-runbook.md)을
 따른다. 이는 실제 계약서나 개인정보 사용 승인이 아니다.
+
+## v0.9.0 제한적 합성 파일럿
+
+`APP_ENV=pilot`은 production과 같은 HTTPS·Host·CORS·Secret·MySQL·proxy·boundary
+검증을 적용하면서 명시적 synthetic Provider만 허용한다. fake와 실제 외부
+Provider, synthetic OCR/PDF는 허용하지 않는다. 전용 Compose override와
+rehearsal은 합성 계정·UTF-8 TXT만 사용하고 종료 시 고유 pilot 자원을 폐기한다.
+
+실행 계약은 [synthetic pilot runbook](docs/deployment/synthetic-pilot-runbook.md)을
+따른다. 이는 production 배포, 실제 데이터 또는 실제 Provider 사용 승인이 아니다.

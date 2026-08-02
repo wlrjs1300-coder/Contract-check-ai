@@ -1,0 +1,47 @@
+name: ${PILOT_PROJECT_NAME:?required}
+
+services:
+  contract-db:
+    ports: !override []
+    volumes:
+      - pilot-data:/var/lib/mysql
+    networks:
+      - pilot-network
+
+  migrate:
+    environment:
+      APP_ENV: pilot
+      ANALYSIS_PROVIDER: synthetic
+    networks:
+      - pilot-network
+
+  api:
+    environment:
+      APP_ENV: pilot
+      ANALYSIS_PROVIDER: synthetic
+      DEBUG: "false"
+      UVICORN_RELOAD: "false"
+    ports: !override
+      - "127.0.0.1:${PILOT_API_PORT:?required}:8000"
+    networks:
+      - pilot-network
+
+  worker:
+    environment:
+      APP_ENV: pilot
+      ANALYSIS_PROVIDER: synthetic
+      DEBUG: "false"
+      UVICORN_RELOAD: "false"
+    networks:
+      - pilot-network
+
+volumes:
+  pilot-data:
+    name: ${PILOT_PROJECT_NAME:?required}-data
+
+networks:
+  pilot-network:
+    name: ${PILOT_PROJECT_NAME:?required}-network
+    ipam:
+      config:
+        - subnet: ${PILOT_NETWORK_SUBNET:?required}

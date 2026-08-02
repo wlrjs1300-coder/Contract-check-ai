@@ -210,3 +210,14 @@ on-call·incident response는 미선정 또는 미연동이다. process-local me
 multi-replica 집계를 보장하지 않으며 synthetic threshold는 production
 승인값이 아니다. 실제 production observability 완료나 실제 계약서·개인정보
 사용 승인을 주장하지 않는다.
+
+## PR-6 제한적 합성 파일럿
+
+`pilot`은 production급 strict 설정 검증을 공유하고 explicit synthetic Provider만
+허용한다. 전용 Compose는 host 3306을 publish하지 않고 고유 volume/network를
+사용한다. rehearsal은 합성 인증·ownership·TXT upload·analysis job·result,
+Secret/backup/restore/observability 연계와 로그 비노출, 종료 cleanup을 검사한다.
+
+어느 gate나 cleanup이 실패하면 완료로 기록하지 않는다. 이 상태는 production
+배포, 실제 데이터·Provider 승인, 외부 observability, Secret manager/KMS,
+retention·incident response·on-call 완료를 의미하지 않는다.
