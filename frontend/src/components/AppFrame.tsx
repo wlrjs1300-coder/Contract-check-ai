@@ -1,16 +1,22 @@
 import type { ReactNode } from 'react'
 import { TopNavigation, type AppPage } from './TopNavigation'
+import type { AuthStatus, AuthUser } from '../types/auth'
+import type { AuthMode } from './AuthDialog'
 
 type AppFrameProps = Readonly<{
   currentPage: AppPage
   children: ReactNode
   onNavigate: (page: AppPage) => void
+  authStatus: AuthStatus
+  currentUser: AuthUser | null
+  onOpenAuth: (mode: AuthMode) => void
+  onLogout: () => void
 }>
 
-export function AppFrame({ currentPage, children, onNavigate }: AppFrameProps) {
+export function AppFrame({ currentPage, children, onNavigate, authStatus, currentUser, onOpenAuth, onLogout }: AppFrameProps) {
   return (
     <div className="app-shell">
-      <TopNavigation currentPage={currentPage} onNavigate={onNavigate} />
+      <TopNavigation currentPage={currentPage} onNavigate={onNavigate} authStatus={authStatus} currentUser={currentUser} onOpenAuth={onOpenAuth} onLogout={onLogout} />
       <div className="app-workspace">
         <main className="app-content">
           <div className="page-transition" key={currentPage}>{children}</div>
